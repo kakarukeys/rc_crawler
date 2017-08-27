@@ -41,6 +41,7 @@ HEADERS = {
 RETRY_MAX = 1
 
 
+# message class for scraper coroutines
 Target = namedtuple("Target", ["retry_count", "url", "referer"])
 
 
@@ -112,7 +113,7 @@ def scrape_online(extract_coro):
         :param input_queue: an asyncio queue as an inbox for the coroutine
         and other arguments
 
-    :rtype: a new coroutine that only takes input_queue and other arguments
+    :rtype: a new coroutine that takes only input_queue and other arguments
     """
     async def scrape_coro(input_queue, *args, **kwargs):
         coro_id = str(hex(id(locals())))[-6:]   # for logging use only, may not be unique
