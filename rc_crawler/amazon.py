@@ -17,6 +17,12 @@ def generate_search_url(keyword):
 
 
 def extract_search_results(target, html):
+    """ Returns a dictionary of useful info from search results ``html``
+
+    :param target: Target object
+    :param html: page html string
+    :rtype: a dict
+    """
     tree = document_fromstring(html)
     output = {}
 
@@ -41,6 +47,12 @@ def extract_search_results(target, html):
 
 
 def extract_listing(target, html):
+    """ Returns a dictionary of useful info from listing page ``html``
+
+    :param target: Target object
+    :param html: page html string
+    :rtype: a dict
+    """
     tree = document_fromstring(html)
 
     try:

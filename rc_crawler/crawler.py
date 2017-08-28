@@ -64,6 +64,7 @@ async def fetch(session, url, device_type, extra_headers={}):
 
     :param session: aiohttp client session
     :param url: url to request
+    :param device_type: pose as desktop/tablet/mobile browser?
     :param extra_headers: dictionary {name: value}
 
     :rtype: a dictionary containing outcome and html.
@@ -103,17 +104,17 @@ async def fetch(session, url, device_type, extra_headers={}):
 
 
 def scrape_online(device_type):
+    """ decorator for html processing coroutine so that its html input is fetched live from a url
+
+    :param process_html_coro: a function that takes the following arguments
+        :param target: Target object the html content was fetched from
+        :param html: html content
+        :param input_queue: an asyncio queue as an inbox for the coroutine
+        and other arguments
+
+    :rtype: a new coroutine that takes only input_queue and other arguments
+    """
     def decorator(process_html_coro):
-        """ decorator for extractor coroutine so that its html input is fetched live from a url
-
-        :param process_html_coro: a function that takes the following arguments
-            :param target: Target object the html content was fetched from
-            :param html: html content
-            :param input_queue: an asyncio queue as an inbox for the coroutine
-            and other arguments
-
-        :rtype: a new coroutine that takes only input_queue and other arguments
-        """
         async def scrape_coro(input_queue, *args, **kwargs):
             coro_id = str(hex(id(locals())))[-6:]   # for logging use only, may not be unique
             logger = logging.getLogger("rc_crawler.scrape_online.{}".format(coro_id))
@@ -145,12 +146,13 @@ def scrape_online(device_type):
                     elif result["outcome"] == "success":
                         logger.debug("fetch succeeded, extracting from html content: {}".format(target.url))
                         await process_html_coro(target, result["html"], input_queue, *args, **kwargs)
+
         return scrape_coro
     return decorator
 
 
 def propagate_crawl(extract):
-    """ decorator for extractor so that its output is fed back into queues for further crawls
+    """ decorator for extractor function so that its output is fed back into queues for further crawls
 
     :param extract: function: target, html -> {"total_listings": ..., "next_url": ..., "listing_urls":...}
 
@@ -198,20 +200,24 @@ def propagate_crawl(extract):
 
 
 def persist_harvest(extract):
-    """ decorator for extractor so that its output is persisted to database
+    """ decorator for extractor function so that its output is persisted to database
 
     :param extract: function: target, html -> {key: value}
 
     :rtype: a new coroutine that takes the following arguments
         :param target: Target object the html content was fetched from
         :param html: html content
+        :param listing_url_queue: an asyncio queue for putting listing urls
+        :param run_timestamp: UNIX timestamp where the crawl started
         and other arguments
     """
     async def persist_output_coro(target, html, listing_url_queue, run_timestamp, *args, **kwargs):
         logger = logging.getLogger("rc_crawler.persist_harvest")
+
         await save_page(run_timestamp, target, html)
 
         output = extract(target, html)
+        output["timestamp"] = run_timestamp
         output.update(target.data)
 
         logger.debug("output persisted: {}".format(output))

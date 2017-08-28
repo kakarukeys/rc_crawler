@@ -29,7 +29,7 @@ def configure_logging(platform):
 
 
 async def start_crawler(platform_module, keyword_file, num_results_scraper, num_listing_scraper):
-    """ start all the components of the crawler
+    """ assemble and start all the components of the crawler
 
     :param platform_module: python module containing platform-dependent scraping logic
     :param keyword_file: a file handle for seed keywords

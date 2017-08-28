@@ -10,6 +10,13 @@ STORAGE_PATH = "pages"
 
 
 async def save_page(run_timestamp, target, html):
+	""" Saves page and target data to directory <STORAGE_PATH>/<platform>/<run timestamp>/
+	under a filename made from <encoded url>.html
+
+	:param run_timestamp: UNIX timestamp when the crawl started
+	:param target: target object the html is fetched from
+	:param html: html string
+	"""
     url_parts = urlsplit(target.url)
 
     platform = url_parts.netloc.split('.')[1]

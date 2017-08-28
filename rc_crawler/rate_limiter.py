@@ -2,6 +2,8 @@ import asyncio
 import time
 
 
+# see https://stackoverflow.com/questions/45440900/throttling-async-functions-in-python-asyncio
+
 class AsyncLeakyBucket(object):
     """A leaky bucket rate limiter.
 
