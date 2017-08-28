@@ -1,3 +1,6 @@
 click==6.7
 aiohttp==2.2.5
+aiofiles==0.3.1
 ujson==1.35
+lxml==3.8.0
+cssselect==1.0.1
