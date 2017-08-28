@@ -178,8 +178,8 @@ def propagate_crawl(extract):
 
             if next_url:
                 await search_url_queue.put((TargetPriority.DEFAULT.value, Target(
-                    url=next_url, referer=target.url, follow_next_count=target.follow_next_count + 1), data=target.data
-                ))
+                    url=next_url, referer=target.url, follow_next_count=target.follow_next_count + 1, data=target.data
+                )))
             else:
                 logger.error("could not extract next url, target: {0}, html: {1}".format(target, html))
 
