@@ -13,7 +13,7 @@ def generate_search_url(keyword):
     :param keyword: search keyword
     :rtype: a tuple
     """
-    return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL
+    return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
 
 
 def extract_search_results(target, html):
@@ -34,12 +34,12 @@ def extract_search_results(target, html):
 
     if target.follow_next_count < FOLLOW_NEXT_MAX:
         try:
-            output["next_url"] = BASE_URL + tree.cssselect(".a-pagination > li:nth-child(2) > a")[0].attrib["href"]
+            output["next_url"] = BASE_URL + tree.cssselect(".a-pagination > li:nth-child(2) > a")[0].attrib["href"].lstrip()
         except (IndexError, KeyError):
             output["next_url"] = None
 
     try:
-        output["listing_urls"] = [BASE_URL + link.attrib["href"] for link in tree.cssselect("a.aw-search-results")]
+        output["listing_urls"] = [BASE_URL + link.attrib["href"].lstrip() for link in tree.cssselect("a.aw-search-results")]
     except KeyError:
         output["listing_urls"] = []
 

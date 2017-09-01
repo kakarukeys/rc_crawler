@@ -7,7 +7,7 @@ import time
 
 import click
 
-from .crawler import seed_search_urls, TargetPriority, scrape_online, propagate_crawl, persist_harvest
+from .crawler import seed_search_urls, TargetPriority, scrape_online, propagate_crawl, persist_harvest, crawl_and_harvest
 
 
 def configure_logging(platform):
@@ -91,6 +91,50 @@ async def start_crawler(platform_module, keyword_file, num_results_scraper, num_
     logger.info("exiting crawler...")
 
 
+async def start_crawler_singular(platform_module, keyword_file, num_scraper):
+    """ assemble and start all the components of the crawler
+
+    :param platform_module: python module containing platform-dependent scraping logic
+    :param keyword_file: a file handle for seed keywords
+    :param num_scraper: parallelism for scraper
+    """
+    logger = logging.getLogger("rc_crawler")
+
+    run_timestamp = int(time.time())
+
+    logger.info("starting crawler, run timestamp: {}".format(run_timestamp))
+    logger.info("starting {} scrapers...".format(num_scraper))
+
+    input_queue = asyncio.PriorityQueue()
+
+    scrape = scrape_online(platform_module.CRAWL_DEVICE_TYPE)(crawl_and_harvest(
+        propagate_crawl(platform_module.extract_search_results),
+        persist_harvest(platform_module.extract_listing)
+    ))
+
+    scrapers = asyncio.gather(
+        *[scrape(input_queue, run_timestamp) for i in range(num_scraper)]
+    )
+
+    scraping_tasks = asyncio.ensure_future(scrapers)
+
+    logger.info("starting to generate keywords from {}".format(keyword_file.name))
+
+    await seed_search_urls(platform_module.generate_search_url, keyword_file, input_queue)
+
+    logger.info("putting stoppers in queue for results scrapers...")
+
+    for i in range(num_scraper):
+        # put lower priority, so that urls are processed first
+        await input_queue.put((TargetPriority.STOPPER.value, None))
+
+    logger.info("waiting for scrapers to complete all tasks...")
+
+    await scraping_tasks
+
+    logger.info("exiting crawler...")
+
+
 @click.command()
 @click.argument("platform")
 @click.argument("keyword_file", type=click.File('r'))
@@ -101,7 +145,10 @@ def main(platform, keyword_file, num_results_scraper, num_listing_scraper):
     configure_logging(platform)
     platform_module = import_module('.' + platform, package="rc_crawler")
 
-    crawler = start_crawler(platform_module, keyword_file, num_results_scraper, num_listing_scraper)
+    if num_listing_scraper:
+        crawler = start_crawler(platform_module, keyword_file, num_results_scraper, num_listing_scraper)
+    else:
+        crawler = start_crawler_singular(platform_module, keyword_file, num_results_scraper)
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(crawler)

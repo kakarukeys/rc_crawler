@@ -11,7 +11,7 @@ from .persist import save_page
 from .rate_limiter import AsyncLeakyBucket
 from .user_agents import USER_AGENTS
 
-leaky_bucket = AsyncLeakyBucket(max_rate=2, time_period=5)    # 2 reqs / 5 secs
+leaky_bucket = AsyncLeakyBucket(max_rate=2, time_period=5)    # 1 req / 2.5 secs
 
 
 HEADERS = {
@@ -30,6 +30,7 @@ RETRY_STATUS_CODES = {500, 502, 503, 504, 408}
 class Target(NamedTuple):
     url: str
     referer: str
+    category: str = None
     retry_count: int = 0
     follow_next_count: int = 0
     data: dict = {}
@@ -39,6 +40,11 @@ class TargetPriority(Enum):
     DEFAULT = 0
     RETRY = 1
     STOPPER = 20
+
+
+class UrlCategory(Enum):
+    SEARCH = "search"
+    LISTING = "listing"
 
 
 async def seed_search_urls(generate_search_url, keyword_file, search_url_queue):
@@ -56,7 +62,10 @@ async def seed_search_urls(generate_search_url, keyword_file, search_url_queue):
         if keyword:
             logger.debug("keyword: {}".format(keyword))
             url, referer = generate_search_url(keyword)
-            await search_url_queue.put((TargetPriority.DEFAULT.value, Target(url=url, referer=referer, data={"keyword": keyword})))
+            await search_url_queue.put((
+                TargetPriority.DEFAULT.value,
+                Target(url=url, referer=referer, category=UrlCategory.SEARCH.value, data={"keyword": keyword})
+            ))
 
 
 async def fetch(session, url, device_type, extra_headers={}):
@@ -139,6 +148,7 @@ def scrape_online(device_type):
                         await input_queue.put((TargetPriority.RETRY.value, Target(
                             url=target.url,
                             referer=target.referer,
+                            category=target.category,
                             retry_count=target.retry_count + 1,
                             follow_next_count=target.follow_next_count,
                             data=target.data
@@ -178,7 +188,11 @@ def propagate_crawl(extract):
 
             if next_url:
                 await search_url_queue.put((TargetPriority.DEFAULT.value, Target(
-                    url=next_url, referer=target.url, follow_next_count=target.follow_next_count + 1, data=target.data
+                    url=next_url,
+                    referer=target.url,
+                    category=UrlCategory.SEARCH.value,
+                    follow_next_count=target.follow_next_count + 1,
+                    data=target.data
                 )))
             else:
                 logger.error("could not extract next url, target: {0}, html: {1}".format(target, html))
@@ -186,12 +200,12 @@ def propagate_crawl(extract):
         listing_urls = output["listing_urls"]
 
         if listing_urls:
-            data = {"total_listings": total_listings}
+            data = {k: v for k, v in output.items() if k not in ("next_url", "listing_urls")}
             data.update(target.data)
 
             for l_url in listing_urls:
                 await listing_url_queue.put((TargetPriority.DEFAULT.value, Target(
-                    url=l_url, referer=target.url, data=data
+                    url=l_url, referer=target.url, category=UrlCategory.LISTING.value, data=data
                 )))
         else:
             logger.error("could not extract listing urls, target: {0}, html: {1}".format(target, html))
@@ -223,3 +237,22 @@ def persist_harvest(extract):
         logger.debug("output persisted: {}".format(output))
 
     return persist_output_coro
+
+
+def crawl_and_harvest(process_html_coro, persist_output_coro):
+    """ decorator to combine search results processing and listing page scraping into one
+
+        :param process_html_coro: same as the output by `propagate_crawl` decorator
+        :param persist_output_coro: same as the output by `persist_harvest` decorator
+
+        :rtype: a new coroutine that can handle both depending on url category
+    """
+    async def combined_process_coro(target, html, input_queue, run_timestamp, *args, **kwargs):
+        if target.category == UrlCategory.SEARCH.value:
+            await process_html_coro(target, html, input_queue, input_queue, *args, **kwargs)
+        elif target.category == UrlCategory.LISTING.value:
+            await persist_output_coro(target, html, input_queue, run_timestamp, *args, **kwargs)
+        else:
+            raise ValueError("target category not recognized: {}".format(target.category))
+
+    return combined_process_coro
