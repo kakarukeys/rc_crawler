@@ -1,4 +1,5 @@
 import asyncio
+import random
 import time
 
 
@@ -54,3 +55,27 @@ class AsyncLeakyBucket(object):
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         pass
+
+
+def limit_actions(rate_limit_params):
+    """ middleware to limit actions
+
+        (platform-dependent arguments)
+        rate_limit_params: [{max_rate: ..., time_period: ...}, ...]
+
+        (decoratee)
+        next_handler: coroutine that performs an action and returns a result
+
+        returns a new coroutine that executes <next_handler> subject to <rate_limit_params>
+    """
+    leaky_buckets = [AsyncLeakyBucket(**kwargs) for kwargs in rate_limit_params]
+
+    def middleware_factory(next_handler):
+        async def middleware(*args, **kwargs):
+            for bucket in leaky_buckets:
+                await bucket.acquire(amount=random.random() + 1)  # rate limiting to avoid detection
+
+            return await next_handler(*args, **kwargs)
+
+        return middleware
+    return middleware_factory

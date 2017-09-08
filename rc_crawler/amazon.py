@@ -1,28 +1,23 @@
+from typing import Tuple
 from lxml.html import document_fromstring
+from .crawler import Target
 
 
 BASE_URL = "https://www.amazon.com"
 SEARCH_URL_TEMPLATE = "/s/ref=nb_sb_noss_1?url=search-alias%3Daps&field-keywords={}"
-CRAWL_DEVICE_TYPE = "mobile"
 FOLLOW_NEXT_MAX = 2
 
+CRAWL_DEVICE_TYPE = "mobile"
+RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 5}]
 
-def generate_search_url(keyword):
-    """ Returns search url, referer url
 
-    :param keyword: search keyword
-    :rtype: a tuple
-    """
+def generate_search_url(keyword: str) -> Tuple[str, str]:
+    """ Returns search url, referer url """
     return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
 
 
-def extract_search_results(target, html):
-    """ Returns a dictionary of useful info from search results ``html``
-
-    :param target: Target object
-    :param html: page html string
-    :rtype: a dict
-    """
+def extract_search_results(target: Target, html: str) -> dict:
+    """ Returns a dictionary of useful info from search results <html> """
     tree = document_fromstring(html)
     output = {}
 
@@ -46,13 +41,8 @@ def extract_search_results(target, html):
     return output
 
 
-def extract_listing(target, html):
-    """ Returns a dictionary of useful info from listing page ``html``
-
-    :param target: Target object
-    :param html: page html string
-    :rtype: a dict
-    """
+def extract_listing(target: Target, html: str) -> dict:
+    """ Returns a dictionary of useful info from listing page <html> """
     tree = document_fromstring(html)
 
     try:

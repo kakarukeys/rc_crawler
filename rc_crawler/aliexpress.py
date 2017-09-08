@@ -1,26 +1,25 @@
+from typing import Tuple
 from lxml.html import document_fromstring
+from .crawler import Target
 
 
-BASE_URL = "https://www.aliexpress.com"
+BASE_URL = "http://www.aliexpress.com"
 SEARCH_URL_TEMPLATE = "/wholesale?catId=0&initiative_id=&SearchText={}"
-CRAWL_DEVICE_TYPE = "desktop"
 FOLLOW_NEXT_MAX = 2
 
+CRAWL_DEVICE_TYPE = "desktop"
+RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}, {"max_rate": 135, "time_period": 3*60*60}]
 
-def generate_search_url(keyword):
-    """ Returns search url, referer url
 
-    :param keyword: search keyword
-    :rtype: a tuple
-    """
+def generate_search_url(keyword: str) -> Tuple[str, str]:
+    """ Returns search url, referer url """
     return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
 
 
-def extract_price_distribution(tree):
+def _extract_price_distribution(tree):
     """ Returns aliexpress's % buyers vs price range
-
-    :param tree: html element tree
-    :rtype: a dictionary {(price_from, price_to): percentage}
+        tree: html element tree
+        returns: {(price_from, price_to): percentage}
     """
     price_histogram = tree.cssselect("#price-range-list > li")
     price_distribution = {}
@@ -49,13 +48,8 @@ def extract_price_distribution(tree):
     return price_distribution
 
 
-def extract_search_results(target, html):
-    """ Returns a dictionary of useful info from search results ``html``
-
-    :param target: Target object
-    :param html: page html string
-    :rtype: a dict
-    """
+def extract_search_results(target: Target, html: str) -> dict:
+    """ Returns a dictionary of useful info from search results <html> """
     tree = document_fromstring(html)
     output = {}
 
@@ -65,29 +59,24 @@ def extract_search_results(target, html):
     except (IndexError, ValueError):
         output["total_listings"] = None
 
-    output["price_distribution"] = extract_price_distribution(tree)
+    output["price_distribution"] = _extract_price_distribution(tree)
 
     if target.follow_next_count < FOLLOW_NEXT_MAX:
         try:
-            output["next_url"] = "https:" + tree.cssselect("a.page-next")[0].attrib["href"].lstrip()
+            output["next_url"] = "http:" + tree.cssselect("a.page-next")[0].attrib["href"].lstrip()
         except (IndexError, KeyError):
             output["next_url"] = None
 
     try:
-        output["listing_urls"] = ["https:" + link.attrib["href"].lstrip() for link in tree.cssselect("a.product")]
+        output["listing_urls"] = ["http:" + link.attrib["href"].lstrip() for link in tree.cssselect("a.product")]
     except KeyError:
         output["listing_urls"] = []
 
     return output
 
 
-def extract_listing(target, html):
-    """ Returns a dictionary of useful info from listing page ``html``
-
-    :param target: Target object
-    :param html: page html string
-    :rtype: a dict
-    """
+def extract_listing(target: Target, html: str) -> dict:
+    """ Returns a dictionary of useful info from listing page <html> """
     tree = document_fromstring(html)
 
     try:

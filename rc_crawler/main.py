@@ -2,15 +2,18 @@
 # -*- coding: utf-8 -*-
 from importlib import import_module
 import asyncio
+import inspect
 import logging
 import time
 
 import click
 
-from .crawler import seed_search_urls, TargetPriority, scrape_online, propagate_crawl, persist_harvest, crawl_and_harvest
+from .crawler import put_seed_urls, TargetPriority, scrape_online
+
+logger = logging.getLogger("rc_crawler")
 
 
-def configure_logging(platform):
+def configure_logging(platform: str) -> None:
     fh = logging.FileHandler("rc_crawler_{}.log".format(platform))
     fh.setLevel(logging.DEBUG)
 
@@ -28,103 +31,46 @@ def configure_logging(platform):
     logger.addHandler(ch)
 
 
-async def start_crawler(platform_module, keyword_file, num_results_scraper, num_listing_scraper):
+def get_extractors(platform_module):
+    """ get extractor functions from <platform_module>
+
+        platform_module: python module containing platform-dependent scraping logic
+
+        returns: {page_category: function}
+    """
+    return {
+        n.lstrip("extract_"): f
+        for n, f in inspect.getmembers(platform_module, inspect.isfunction)
+        if n.startswith("extract_")
+    }
+
+
+async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrapers):
     """ assemble and start all the components of the crawler
 
-    :param platform_module: python module containing platform-dependent scraping logic
-    :param keyword_file: a file handle for seed keywords
-    :param num_results_scraper: parallelism for search results scraper
-    :param num_listing_scraper: parallelism for listing scraper
+        platform_module: python module containing platform-dependent scraping logic
+        keyword_file: a file handle for seed keywords
+        run_timestamp: UNIX timestamp in seconds
+        num_scrapers: parallelism for scraper
     """
-    logger = logging.getLogger("rc_crawler")
-
-    run_timestamp = int(time.time())
-
     logger.info("starting crawler, run timestamp: {}".format(run_timestamp))
-    logger.info("starting {} listing scrapers...".format(num_listing_scraper))
-
-    listing_url_queue = asyncio.PriorityQueue()
-
-    scrape_listings = scrape_online(platform_module.CRAWL_DEVICE_TYPE)(
-        persist_harvest(platform_module.extract_listing)
-    )
-    listing_scrapers = asyncio.gather(
-        *[scrape_listings(listing_url_queue, run_timestamp) for i in range(num_listing_scraper)]
-    )
-    listing_scraping_tasks = asyncio.ensure_future(listing_scrapers)
-
-    logger.info("starting {} search results scrapers...".format(num_results_scraper))
-
-    search_url_queue = asyncio.PriorityQueue()
-
-    scrape_search_results = scrape_online(platform_module.CRAWL_DEVICE_TYPE)(
-        propagate_crawl(platform_module.extract_search_results)
-    )
-    search_results_scrapers = asyncio.gather(
-        *[scrape_search_results(search_url_queue, listing_url_queue) for i in range(num_results_scraper)]
-    )
-    search_results_scraping_tasks = asyncio.ensure_future(search_results_scrapers)
-
-    logger.info("starting to generate keywords from {}".format(keyword_file.name))
-
-    await seed_search_urls(platform_module.generate_search_url, keyword_file, search_url_queue)
-
-    logger.info("putting stoppers in queue for results scrapers...")
-
-    for i in range(num_results_scraper):
-        # put lower priority, so that urls are processed first
-        await search_url_queue.put((TargetPriority.STOPPER.value, None))
-
-    logger.info("waiting for results scrapers to complete all tasks...")
-
-    await search_results_scraping_tasks
-
-    logger.info("putting stoppers in queue for listing scrapers...")
-
-    for i in range(num_listing_scraper):
-        await listing_url_queue.put((TargetPriority.STOPPER.value, None))
-
-    logger.info("waiting for listing scrapers to complete all tasks...")
-
-    await listing_scraping_tasks
-
-    logger.info("exiting crawler...")
-
-
-async def start_crawler_singular(platform_module, keyword_file, num_scraper):
-    """ assemble and start all the components of the crawler
-
-    :param platform_module: python module containing platform-dependent scraping logic
-    :param keyword_file: a file handle for seed keywords
-    :param num_scraper: parallelism for scraper
-    """
-    logger = logging.getLogger("rc_crawler")
-
-    run_timestamp = int(time.time())
-
-    logger.info("starting crawler, run timestamp: {}".format(run_timestamp))
-    logger.info("starting {} scrapers...".format(num_scraper))
+    logger.info("starting {} scrapers...".format(num_scrapers))
 
     input_queue = asyncio.PriorityQueue()
 
-    scrape = scrape_online(platform_module.CRAWL_DEVICE_TYPE)(crawl_and_harvest(
-        propagate_crawl(platform_module.extract_search_results),
-        persist_harvest(platform_module.extract_listing)
-    ))
+    scrape = scrape_online(run_timestamp, platform_module.CRAWL_DEVICE_TYPE, platform_module.RATE_LIMIT_PARAMS)(
+        get_extractors(platform_module))
 
-    scrapers = asyncio.gather(
-        *[scrape(input_queue, run_timestamp) for i in range(num_scraper)]
-    )
-
+    scrapers = asyncio.gather(*[scrape(input_queue) for i in range(num_scrapers)])
     scraping_tasks = asyncio.ensure_future(scrapers)
 
     logger.info("starting to generate keywords from {}".format(keyword_file.name))
 
-    await seed_search_urls(platform_module.generate_search_url, keyword_file, input_queue)
+    await put_seed_urls(platform_module.generate_search_url, keyword_file, input_queue)
 
     logger.info("putting stoppers in queue for results scrapers...")
 
-    for i in range(num_scraper):
+    for _ in range(num_scrapers):
         # put lower priority, so that urls are processed first
         await input_queue.put((TargetPriority.STOPPER.value, None))
 
@@ -138,17 +84,14 @@ async def start_crawler_singular(platform_module, keyword_file, num_scraper):
 @click.command()
 @click.argument("platform")
 @click.argument("keyword_file", type=click.File('r'))
-@click.option("--num-results-scraper", default=1, help="Number of search results page scrapers")
-@click.option("--num-listing-scraper", default=10, help="Number of listing page scrapers")
-def main(platform, keyword_file, num_results_scraper, num_listing_scraper):
+@click.option("--run-timestamp", type=int, default=lambda: int(time.time()), help="Timestamp to mark this crawl")
+@click.option("--num-scrapers", type=int, default=1, help="Number of scrapers")
+def main(platform, *args, **kwargs):
     """ Start crawler to mine for product data off eCommerce platform. """
     configure_logging(platform)
     platform_module = import_module('.' + platform, package="rc_crawler")
 
-    if num_listing_scraper:
-        crawler = start_crawler(platform_module, keyword_file, num_results_scraper, num_listing_scraper)
-    else:
-        crawler = start_crawler_singular(platform_module, keyword_file, num_results_scraper)
+    crawler = start_crawler(platform_module, *args, **kwargs)
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(crawler)

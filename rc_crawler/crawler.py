@@ -1,25 +1,20 @@
 from enum import Enum
 from typing import NamedTuple
 import logging
-import random
-import time
 
 import aiohttp
 import ujson
 
-from .persist import save_page
-from .rate_limiter import AsyncLeakyBucket
+from .persist import back_by_storage
+from .rate_limiter import limit_actions
 from .user_agents import USER_AGENTS
-
-leaky_bucket = AsyncLeakyBucket(max_rate=2, time_period=5)    # 1 req / 2.5 secs
 
 
 HEADERS = {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Encoding': 'gzip, deflate, br',
-    'Accept-Language': 'en-US,en;q=0.8,zh-TW;q=0.6,zh;q=0.4',
+    'Accept-Language': 'en-US,en;q=0.5',
     'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
 }
 
 RETRY_MAX = 1
@@ -28,12 +23,12 @@ RETRY_STATUS_CODES = {500, 502, 503, 504, 408}
 
 # message class for scraper coroutines
 class Target(NamedTuple):
+    keyword: str
     url: str
     referer: str
     category: str = None
     retry_count: int = 0
     follow_next_count: int = 0
-    data: dict = {}
 
 
 class TargetPriority(Enum):
@@ -42,19 +37,19 @@ class TargetPriority(Enum):
     STOPPER = 20
 
 
-class UrlCategory(Enum):
-    SEARCH = "search"
+class PageCategory(Enum):
+    SEARCH = "search_results"
     LISTING = "listing"
 
 
-async def seed_search_urls(generate_search_url, keyword_file, search_url_queue):
+async def put_seed_urls(generate_search_url, keyword_file, input_queue):
     """ put seed search urls in queue
 
-    :param generate_search_url: function: keyword -> url, referer
-    :param keyword_file: opened file handle
-    :param search_url_queue: processing queue
+        generate_search_url: function: keyword -> url, referer
+        keyword_file: opened file handle
+        input_queue: processing queue
     """
-    logger = logging.getLogger("rc_crawler.seed_search_urls")
+    logger = logging.getLogger("rc_crawler.put_seed_urls")
 
     for line in keyword_file:
         keyword = line.strip()
@@ -62,32 +57,23 @@ async def seed_search_urls(generate_search_url, keyword_file, search_url_queue):
         if keyword:
             logger.debug("keyword: {}".format(keyword))
             url, referer = generate_search_url(keyword)
-            await search_url_queue.put((
+
+            await input_queue.put((
                 TargetPriority.DEFAULT.value,
-                Target(url=url, referer=referer, category=UrlCategory.SEARCH.value, data={"keyword": keyword})
+                Target(keyword=keyword, url=url, referer=referer, category=PageCategory.SEARCH.value)
             ))
 
 
-async def fetch(session, url, device_type, extra_headers={}):
-    """ fetch html content from url
-
-    :param session: aiohttp client session
-    :param url: url to request
-    :param device_type: pose as desktop/tablet/mobile browser?
-    :param extra_headers: dictionary {name: value}
-
-    :rtype: a dictionary containing outcome and html.
+async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}) -> None:
+    """ fetch html content from <url>
+        returns {"outcome": ..., (optional) "html": ...}
     """
     logger = logging.getLogger("rc_crawler.fetch")
 
-    await leaky_bucket.acquire(amount=random.random() + 1)    # rate limiting to avoid detection
-
-    headers = {"User-Agent": USER_AGENTS[device_type][0]}
-    headers.update(extra_headers)
-    logger.debug("sending request to {0} with extra headers {1}".format(url, headers))
+    logger.debug("sending request to {0} with extra headers {1}".format(url, extra_headers))
 
     try:
-        async with session.get(url, headers=headers) as response:
+        async with session.get(url, headers=extra_headers) as response:
             html = await response.text()
 
             if response.status == 200:
@@ -112,21 +98,71 @@ async def fetch(session, url, device_type, extra_headers={}):
         return {"outcome": "failure"}
 
 
-def scrape_online(device_type):
-    """ decorator for html processing coroutine so that its html input is fetched live from a url
-
-    :param process_html_coro: a function that takes the following arguments
-        :param target: Target object the html content was fetched from
-        :param html: html content
-        :param input_queue: an asyncio queue as an inbox for the coroutine
-        and other arguments
-
-    :rtype: a new coroutine that takes only input_queue and other arguments
+async def harvest(output, target, input_queue, run_timestamp):
+    """ harvest extracted output from html, follow links and save data
+        (function modifies output)
     """
-    def decorator(process_html_coro):
-        async def scrape_coro(input_queue, *args, **kwargs):
+    logger = logging.getLogger("rc_crawler.harvest")
+
+    for key, value in output.items():
+        if not value:
+            logger.error("could not extract {0} from target: {1}".format(key, target))
+
+    # follow links
+    next_url = output.pop("next_url", None)
+
+    if next_url:
+        await input_queue.put((TargetPriority.DEFAULT.value, Target(
+            url=next_url,
+            referer=target.url,
+            category=PageCategory.SEARCH.value,
+            follow_next_count=target.follow_next_count + 1,
+            keyword=target.keyword
+        )))
+
+    listing_urls = output.pop("listing_urls", [])
+
+    for l_url in listing_urls:
+        await input_queue.put((TargetPriority.DEFAULT.value, Target(
+            url=l_url,
+            referer=target.url,
+            category=PageCategory.LISTING.value,
+            keyword=target.keyword
+        )))
+
+    # save data
+    output["timestamp"] = run_timestamp
+    output["keyword"] = target.keyword
+    output["url"] = target.url
+    logger.debug("output persisted: {}".format(output))
+
+
+def scrape_online(run_timestamp, device_type, rate_limit_params):
+    """ decorator for data extraction functions to perform complete web scraping
+
+        run_timestamp: UNIX timestamp when the crawl started
+
+        (platform-dependent arguments)
+        device_type: pose as desktop/tablet/mobile browser?
+        rate_limit_params: [{max_rate: ..., time_period: ...}, ...]
+
+        (decoratee)
+        extractors: {page_category: function extract_<page_category>: html -> {key: value}}
+
+        returns a coroutine that takes the following argument
+            input_queue: an asyncio priority queue as an inbox for the coroutine
+    """
+    # install middlewares
+    download = back_by_storage(run_timestamp)(
+        limit_actions(rate_limit_params)(
+            fetch))
+
+    def decorator(extractors):
+        async def scrape_coro(input_queue):
             coro_id = str(hex(id(locals())))[-6:]   # for logging use only, may not be unique
-            logger = logging.getLogger("rc_crawler.scrape_online.{}".format(coro_id))
+            logger = logging.getLogger("rc_crawler.scrape.{}".format(coro_id))
+
+            user_agent = USER_AGENTS[device_type][0]
 
             async with aiohttp.ClientSession(headers=HEADERS, json_serialize=ujson.dumps) as session:
                 logger.info("starting aiohttp client session with headers {}".format(HEADERS))
@@ -138,121 +174,29 @@ def scrape_online(device_type):
                         logger.info("exiting scraper coroutine...")
                         break
 
-                    logger.debug("fetching content from {0} referring from {1}{2}".format(
-                        target.url, target.referer, ", retrying" if target.retry_count else ''))
+                    logger.debug("downloading content from {0} url {1}, keywords: {2}, referring from {3}{4}".format(
+                        target.category, target.url, target.keyword, target.referer, ", retrying" if target.retry_count else ''))
 
-                    result = await fetch(session, target.url, device_type, {"Referer": target.referer})
+                    extra_headers = {"Referer": target.referer, "User-Agent": user_agent}
+                    result = await download(session, target.url, extra_headers)
 
                     if result["outcome"] == "retry" and target.retry_count < RETRY_MAX:
                         logger.warning("fetch failed, scheduling for retry: {}".format(target.url))
+
                         await input_queue.put((TargetPriority.RETRY.value, Target(
+                            keyword=target.keyword,
                             url=target.url,
                             referer=target.referer,
                             category=target.category,
                             retry_count=target.retry_count + 1,
-                            follow_next_count=target.follow_next_count,
-                            data=target.data
+                            follow_next_count=target.follow_next_count
                         )))
+
                     elif result["outcome"] == "success":
-                        logger.debug("fetch succeeded, extracting from html content: {}".format(target.url))
-                        await process_html_coro(target, result["html"], input_queue, *args, **kwargs)
+                        logger.debug("fetch succeeded, harvesting from html content: {}".format(target.url))
+
+                        output = extractors[target.category](result["html"])
+                        await harvest(output, target, input_queue, run_timestamp)
 
         return scrape_coro
     return decorator
-
-
-def propagate_crawl(extract):
-    """ decorator for extractor function so that its output is fed back into queues for further crawls
-
-    :param extract: function: target, html -> {"total_listings": ..., "next_url": ..., "listing_urls":...}
-
-    :rtype: a new coroutine that takes the following arguments
-        :param target: Target object the html content was fetched from
-        :param html: html content
-        :param search_url_queue: an asyncio queue for putting search urls
-        :param listing_url_queue: an asyncio queue for putting listing urls
-        and other arguments
-    """
-    async def process_html_coro(target, html, search_url_queue, listing_url_queue, *args, **kwargs):
-        logger = logging.getLogger("rc_crawler.propagate_crawl")
-
-        output = extract(target, html)
-
-        total_listings = output["total_listings"]
-
-        if total_listings is None:
-            logger.error("could not extract total listings, target: {0}, html: {1}".format(target, html))
-
-        if "next_url" in output:
-            next_url = output["next_url"]
-
-            if next_url:
-                await search_url_queue.put((TargetPriority.DEFAULT.value, Target(
-                    url=next_url,
-                    referer=target.url,
-                    category=UrlCategory.SEARCH.value,
-                    follow_next_count=target.follow_next_count + 1,
-                    data=target.data
-                )))
-            else:
-                logger.error("could not extract next url, target: {0}, html: {1}".format(target, html))
-
-        listing_urls = output["listing_urls"]
-
-        if listing_urls:
-            data = {k: v for k, v in output.items() if k not in ("next_url", "listing_urls")}
-            data.update(target.data)
-
-            for l_url in listing_urls:
-                await listing_url_queue.put((TargetPriority.DEFAULT.value, Target(
-                    url=l_url, referer=target.url, category=UrlCategory.LISTING.value, data=data
-                )))
-        else:
-            logger.error("could not extract listing urls, target: {0}, html: {1}".format(target, html))
-
-    return process_html_coro
-
-
-def persist_harvest(extract):
-    """ decorator for extractor function so that its output is persisted to database
-
-    :param extract: function: target, html -> {key: value}
-
-    :rtype: a new coroutine that takes the following arguments
-        :param target: Target object the html content was fetched from
-        :param html: html content
-        :param listing_url_queue: an asyncio queue for putting listing urls
-        :param run_timestamp: UNIX timestamp where the crawl started
-        and other arguments
-    """
-    async def persist_output_coro(target, html, listing_url_queue, run_timestamp, *args, **kwargs):
-        logger = logging.getLogger("rc_crawler.persist_harvest")
-
-        await save_page(run_timestamp, target, html)
-
-        output = extract(target, html)
-        output["timestamp"] = run_timestamp
-        output.update(target.data)
-
-        logger.debug("output persisted: {}".format(output))
-
-    return persist_output_coro
-
-
-def crawl_and_harvest(process_html_coro, persist_output_coro):
-    """ decorator to combine search results processing and listing page scraping into one
-
-        :param process_html_coro: same as the output by `propagate_crawl` decorator
-        :param persist_output_coro: same as the output by `persist_harvest` decorator
-
-        :rtype: a new coroutine that can handle both depending on url category
-    """
-    async def combined_process_coro(target, html, input_queue, run_timestamp, *args, **kwargs):
-        if target.category == UrlCategory.SEARCH.value:
-            await process_html_coro(target, html, input_queue, input_queue, *args, **kwargs)
-        elif target.category == UrlCategory.LISTING.value:
-            await persist_output_coro(target, html, input_queue, run_timestamp, *args, **kwargs)
-        else:
-            raise ValueError("target category not recognized: {}".format(target.category))
-
-    return combined_process_coro
