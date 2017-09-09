@@ -1,4 +1,5 @@
 from typing import Tuple, Optional
+from itertools import cycle
 import random
 
 
@@ -36,11 +37,11 @@ USER_AGENTS = {
     ),
 }
 
-PROXIES = (
+PROXIES = cycle([
     None,
     "http://119.81.197.124:3128",
-)
+])
 
 
 def renew_agent(device_type: str) -> Tuple[str, Optional[str]]:
-    return random.choice(USER_AGENTS[device_type]), random.choice(PROXIES)
+    return random.choice(USER_AGENTS[device_type]), next(PROXIES)

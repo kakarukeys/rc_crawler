@@ -7,7 +7,7 @@ import logging
 import aiohttp
 import ujson
 
-from .exceptions import AntiScrapingError
+from .exceptions import AntiScrapingError, ProxyError
 from .persist import back_by_storage
 from .rate_limiter import limit_actions
 from .agents import renew_agent
@@ -22,6 +22,7 @@ HEADERS = {
 
 RETRY_MAX = 1
 RETRY_STATUS_CODES = {500, 502, 503, 504, 408}
+PROXY_ERROR_STATUS_CODES = {407, 515}
 
 
 # message class for scraper coroutines
@@ -63,15 +64,23 @@ async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}
                 logger.error("non-200 response, url: {0}, request headers: {1}, status: {2}, html: {3}".format(
                     url, response.request_info.headers, response.status, html))
 
-                if response.status in RETRY_STATUS_CODES:
+                if response.status in PROXY_ERROR_STATUS_CODES:
+                    raise ProxyError("fetch failed due to proxy problem, url: {0}, proxy: {1}".format(url, proxy))
+                elif response.status in RETRY_STATUS_CODES:
                     return {"outcome": "retry"}
                 else:
                     return {"outcome": "failure"}
 
     except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError) as e:
+        if isinstance(e.__cause__, aiohttp.ClientProxyConnectionError):
+            raise ProxyError("fetch failed due to proxy problem, url: {0}, proxy: {1}".format(url, proxy)) from e
+
         logger.warning("need to retry fetch due to aiohttp exception, url: {0}".format(url))
         logger.exception(e)
         return {"outcome": "retry"}
+
+    except aiohttp.ClientHttpProxyError as e:
+        raise ProxyError("fetch failed due to proxy problem, url: {0}, proxy: {1}".format(url, proxy)) from e
 
     except aiohttp.ClientResponseError as e:
         logger.error("fetch failed due to aiohttp exception, url: {0}".format(url))
@@ -173,6 +182,9 @@ class Scraper:
             output = self.extractors[target.category](target, result["html"])
             await harvest(output, target, self.input_queue, self.run_timestamp)
 
+        else:
+            self.logger.error("download failed: {}, please analyze, skip to next one".format(target.url))
+
     async def start(self):
         self.logger.info("starting aiohttp client session with headers {}".format(HEADERS))
 
@@ -187,8 +199,14 @@ class Scraper:
 
                 try:
                     self.on_receive(target, session, user_agent, proxy)
-                except AntiScrapingError:
-                    self.logger.warning("anti-scraping mechanism triggered, changing visitor...")
+                except (AntiScrapingError, ProxyError) as e:
+                    if isinstance(e, AntiScrapingError):
+                        msg = "anti-scraping mechanism triggered"
+                    else:
+                        msg = "proxy error occurred"
+
+                    self.logger.warning("{}, changing proxy...".format(msg))
+                    self.logger.exception(e)
 
                     user_agent, proxy = renew_agent(self.device_type)
                     session.cookies.clear()
