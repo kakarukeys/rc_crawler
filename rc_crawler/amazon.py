@@ -8,6 +8,8 @@ SEARCH_URL_TEMPLATE = "/s/ref=nb_sb_noss_1?url=search-alias%3Daps&field-keywords
 FOLLOW_NEXT_MAX = 2
 
 CRAWL_DEVICE_TYPE = "mobile"
+
+# reqs / secs
 RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 5}]
 
 

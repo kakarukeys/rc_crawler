@@ -112,6 +112,8 @@ async def harvest(output, target, input_queue, run_timestamp):
     next_url = output.pop("next_url", None)
 
     if next_url:
+        logger.debug("target: {0}, next_url: {1}".format(target, next_url))
+
         await input_queue.put((TargetPriority.DEFAULT.value, Target(
             url=next_url,
             referer=target.url,
@@ -181,7 +183,7 @@ def scrape_online(run_timestamp, device_type, rate_limit_params):
                     result = await download(session, target.url, extra_headers)
 
                     if result["outcome"] == "retry" and target.retry_count < RETRY_MAX:
-                        logger.warning("fetch failed, scheduling for retry: {}".format(target.url))
+                        logger.warning("download failed, scheduling for retry: {}".format(target.url))
 
                         await input_queue.put((TargetPriority.RETRY.value, Target(
                             keyword=target.keyword,
@@ -193,9 +195,9 @@ def scrape_online(run_timestamp, device_type, rate_limit_params):
                         )))
 
                     elif result["outcome"] == "success":
-                        logger.debug("fetch succeeded, harvesting from html content: {}".format(target.url))
+                        logger.debug("download succeeded, harvesting from html content: {}".format(target.url))
 
-                        output = extractors[target.category](result["html"])
+                        output = extractors[target.category](target, result["html"])
                         await harvest(output, target, input_queue, run_timestamp)
 
         return scrape_coro

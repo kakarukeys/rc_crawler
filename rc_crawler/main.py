@@ -10,8 +10,6 @@ import click
 
 from .crawler import put_seed_urls, TargetPriority, scrape_online
 
-logger = logging.getLogger("rc_crawler")
-
 
 def configure_logging(platform: str) -> None:
     fh = logging.FileHandler("rc_crawler_{}.log".format(platform))
@@ -53,6 +51,8 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
         run_timestamp: UNIX timestamp in seconds
         num_scrapers: parallelism for scraper
     """
+    logger = logging.getLogger("rc_crawler")
+
     logger.info("starting crawler, run timestamp: {}".format(run_timestamp))
     logger.info("starting {} scrapers...".format(num_scrapers))
 

@@ -1,7 +1,7 @@
 from base64 import urlsafe_b64encode
 from pathlib import Path
 from typing import Tuple
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qs, urlencode, SplitResult
 import logging
 
 import aiofiles
@@ -9,6 +9,19 @@ import aiofiles
 logger = logging.getLogger("rc_crawler.persist")
 
 STORAGE_PATH = "pages"
+QUERY_PARAM_VALUE_MAX_LENGTH = 30
+
+
+def build_concise_url(url_parts: SplitResult) -> str:
+    """ shorten the url while keeping important details """
+    query_params = parse_qs(url_parts.query)
+    trimmed_query_params = {n: l for n, l in query_params.items() if sum(len(v) for v in l) < QUERY_PARAM_VALUE_MAX_LENGTH}
+    new_qs = urlencode(trimmed_query_params, doseq=True)
+
+    if new_qs:
+        return "{0}?{1}".format(url_parts.path, new_qs)
+    else:
+        return url_parts.path
 
 
 def get_filepath(url: str, run_timestamp: int) -> Tuple[Path, str]:
@@ -21,10 +34,13 @@ def get_filepath(url: str, run_timestamp: int) -> Tuple[Path, str]:
     """
     url_parts = urlsplit(url)
     platform = url_parts.netloc.split('.')[1]
-    concise_url = "{0.scheme}://{0.netloc}{0.path}".format(url_parts)
+    concise_url = build_concise_url(url_parts)
 
     dirpath = Path(STORAGE_PATH) / platform / str(run_timestamp)
-    filename = urlsafe_b64encode(concise_url.encode()).decode() + ".html"
+    filename = urlsafe_b64encode(concise_url.encode()).decode()
+
+    assert len(filename) < 256, "length of filename generated has exceeded Linux filesystem limit"
+
     return dirpath, filename
 
 
@@ -44,7 +60,7 @@ def back_by_storage(run_timestamp):
             page_filepath = dirpath / filename
 
             if page_filepath.exists():
-                logging.info("reading from {0} instead of fetching from {1}".format(page_filepath, url))
+                logger.info("reading from {0} instead of fetching from {1}".format(page_filepath, url))
 
                 async with aiofiles.open(page_filepath) as f:
                     html = await f.read()
@@ -53,12 +69,12 @@ def back_by_storage(run_timestamp):
             result = await next_handler(session, url, *args, **kwargs)
 
             if result["outcome"] == "success":
-                logging.debug("save html from {1} to {0}".format(page_filepath, url))
+                logger.debug("save html from {1} to {0}".format(page_filepath, url))
 
                 dirpath.mkdir(parents=True, exist_ok=True)
 
                 async with aiofiles.open(page_filepath, 'w') as f:
-                    await f.write(html)
+                    await f.write(result["html"])
 
             return result
 

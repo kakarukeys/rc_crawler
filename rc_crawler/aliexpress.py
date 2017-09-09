@@ -8,6 +8,8 @@ SEARCH_URL_TEMPLATE = "/wholesale?catId=0&initiative_id=&SearchText={}"
 FOLLOW_NEXT_MAX = 2
 
 CRAWL_DEVICE_TYPE = "desktop"
+
+# reqs / secs
 RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}, {"max_rate": 135, "time_period": 3*60*60}]
 
 
