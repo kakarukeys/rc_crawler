@@ -1,3 +1,7 @@
+from typing import Tuple, Optional
+import random
+
+
 USER_AGENTS = {
     "desktop": (
         "Mozilla/5.0 (X11; Linux x86_64; rv:55.0) Gecko/20100101 Firefox/55.0",
@@ -31,3 +35,12 @@ USER_AGENTS = {
         "Mozilla/5.0 (Windows Phone 10.0; Android 4.2.1; Microsoft; Lumia 950) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/46.0.2486.0 Mobile Safari/537.36 Edge/13.10586",
     ),
 }
+
+PROXIES = (
+    None,
+    "http://119.81.197.124:3128",
+)
+
+
+def renew_agent(device_type: str) -> Tuple[str, Optional[str]]:
+    return random.choice(USER_AGENTS[device_type]), random.choice(PROXIES)

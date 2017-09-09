@@ -8,7 +8,7 @@ import time
 
 import click
 
-from .crawler import put_seed_urls, TargetPriority, scrape_online
+from .crawler import put_seed_urls, TargetPriority, Scraper
 
 
 def configure_logging(platform: str) -> None:
@@ -58,15 +58,18 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
 
     input_queue = asyncio.PriorityQueue()
 
-    scrape = scrape_online(run_timestamp, platform_module.CRAWL_DEVICE_TYPE, platform_module.RATE_LIMIT_PARAMS)(
-        get_extractors(platform_module))
+    scrapers = [Scraper(
+        run_timestamp,
+        platform_module.CRAWL_DEVICE_TYPE,
+        platform_module.RATE_LIMIT_PARAMS,
+        get_extractors(platform_module)
+    ) for i in range(num_scrapers)]
 
-    scrapers = asyncio.gather(*[scrape(input_queue) for i in range(num_scrapers)])
-    scraping_tasks = asyncio.ensure_future(scrapers)
+    scraping_tasks = asyncio.ensure_future(asyncio.gather(*[sc.start() for sc in scrapers]))
 
     logger.info("starting to generate keywords from {}".format(keyword_file.name))
 
-    await put_seed_urls(platform_module.generate_search_url, keyword_file, input_queue)
+    await put_seed_urls(platform_module.generate_search_url, keyword_file, scrapers)
 
     logger.info("putting stoppers in queue for results scrapers...")
 

@@ -1,13 +1,16 @@
 from enum import Enum
+from itertools import cycle
 from typing import NamedTuple
+import asyncio
 import logging
 
 import aiohttp
 import ujson
 
+from .exceptions import AntiScrapingError
 from .persist import back_by_storage
 from .rate_limiter import limit_actions
-from .user_agents import USER_AGENTS
+from .agents import renew_agent
 
 
 HEADERS = {
@@ -42,29 +45,7 @@ class PageCategory(Enum):
     LISTING = "listing"
 
 
-async def put_seed_urls(generate_search_url, keyword_file, input_queue):
-    """ put seed search urls in queue
-
-        generate_search_url: function: keyword -> url, referer
-        keyword_file: opened file handle
-        input_queue: processing queue
-    """
-    logger = logging.getLogger("rc_crawler.put_seed_urls")
-
-    for line in keyword_file:
-        keyword = line.strip()
-
-        if keyword:
-            logger.debug("keyword: {}".format(keyword))
-            url, referer = generate_search_url(keyword)
-
-            await input_queue.put((
-                TargetPriority.DEFAULT.value,
-                Target(keyword=keyword, url=url, referer=referer, category=PageCategory.SEARCH.value)
-            ))
-
-
-async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}) -> None:
+async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}, proxy: str=None) -> None:
     """ fetch html content from <url>
         returns {"outcome": ..., (optional) "html": ...}
     """
@@ -73,7 +54,7 @@ async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}
     logger.debug("sending request to {0} with extra headers {1}".format(url, extra_headers))
 
     try:
-        async with session.get(url, headers=extra_headers) as response:
+        async with session.get(url, headers=extra_headers, proxy=proxy) as response:
             html = await response.text()
 
             if response.status == 200:
@@ -139,66 +120,103 @@ async def harvest(output, target, input_queue, run_timestamp):
     logger.debug("output persisted: {}".format(output))
 
 
-def scrape_online(run_timestamp, device_type, rate_limit_params):
-    """ decorator for data extraction functions to perform complete web scraping
+class Scraper:
+    """ Actor to perform complete web scraping
 
         run_timestamp: UNIX timestamp when the crawl started
 
         (platform-dependent arguments)
         device_type: pose as desktop/tablet/mobile browser?
         rate_limit_params: [{max_rate: ..., time_period: ...}, ...]
-
-        (decoratee)
         extractors: {page_category: function extract_<page_category>: html -> {key: value}}
-
-        returns a coroutine that takes the following argument
-            input_queue: an asyncio priority queue as an inbox for the coroutine
     """
-    # install middlewares
-    download = back_by_storage(run_timestamp)(
-        limit_actions(rate_limit_params)(
-            fetch))
+    def __init__(self, run_timestamp, device_type, rate_limit_params, extractors):
+        actor_id = str(hex(id(self)))[-6:]   # for logging use only, may not be unique
+        self.logger = logging.getLogger("rc_crawler.scrape.{}".format(actor_id))
 
-    def decorator(extractors):
-        async def scrape_coro(input_queue):
-            coro_id = str(hex(id(locals())))[-6:]   # for logging use only, may not be unique
-            logger = logging.getLogger("rc_crawler.scrape.{}".format(coro_id))
+        self.input_queue = asyncio.PriorityQueue()  # actor inbox
 
-            user_agent = USER_AGENTS[device_type][0]
+        self.run_timestamp = run_timestamp
+        self.device_type = device_type
+        self.extractors = extractors
 
-            async with aiohttp.ClientSession(headers=HEADERS, json_serialize=ujson.dumps) as session:
-                logger.info("starting aiohttp client session with headers {}".format(HEADERS))
+        # install middlewares
+        self.download = back_by_storage(run_timestamp)(
+            limit_actions(rate_limit_params)(
+                fetch))
 
-                while True:
-                    _, target = await input_queue.get()
+    async def send(self, *args, **kwargs):
+        await self.input_queue.put(*args, **kwargs)
 
-                    if target is None:
-                        logger.info("exiting scraper coroutine...")
-                        break
+    async def on_receive(self, target, session, user_agent, proxy=None):
+        self.logger.debug("downloading content from {0} url {1}, keywords: {2}, referring from {3}{4}".format(
+            target.category, target.url, target.keyword, target.referer, ", retrying" if target.retry_count else ''))
 
-                    logger.debug("downloading content from {0} url {1}, keywords: {2}, referring from {3}{4}".format(
-                        target.category, target.url, target.keyword, target.referer, ", retrying" if target.retry_count else ''))
+        extra_headers = {"Referer": target.referer, "User-Agent": user_agent}
+        result = await self.download(session, target.url, extra_headers=extra_headers, proxy=proxy)
 
-                    extra_headers = {"Referer": target.referer, "User-Agent": user_agent}
-                    result = await download(session, target.url, extra_headers)
+        if result["outcome"] == "retry" and target.retry_count < RETRY_MAX:
+            self.logger.warning("download failed, scheduling for retry: {}".format(target.url))
 
-                    if result["outcome"] == "retry" and target.retry_count < RETRY_MAX:
-                        logger.warning("download failed, scheduling for retry: {}".format(target.url))
+            await self.input_queue.put((TargetPriority.RETRY.value, Target(
+                keyword=target.keyword,
+                url=target.url,
+                referer=target.referer,
+                category=target.category,
+                retry_count=target.retry_count + 1,
+                follow_next_count=target.follow_next_count
+            )))
 
-                        await input_queue.put((TargetPriority.RETRY.value, Target(
-                            keyword=target.keyword,
-                            url=target.url,
-                            referer=target.referer,
-                            category=target.category,
-                            retry_count=target.retry_count + 1,
-                            follow_next_count=target.follow_next_count
-                        )))
+        elif result["outcome"] == "success":
+            self.logger.debug("download succeeded, harvesting from html content: {}".format(target.url))
 
-                    elif result["outcome"] == "success":
-                        logger.debug("download succeeded, harvesting from html content: {}".format(target.url))
+            output = self.extractors[target.category](target, result["html"])
+            await harvest(output, target, self.input_queue, self.run_timestamp)
 
-                        output = extractors[target.category](target, result["html"])
-                        await harvest(output, target, input_queue, run_timestamp)
+    async def start(self):
+        self.logger.info("starting aiohttp client session with headers {}".format(HEADERS))
 
-        return scrape_coro
-    return decorator
+        user_agent, proxy = renew_agent(self.device_type)
+
+        async with aiohttp.ClientSession(headers=HEADERS, json_serialize=ujson.dumps) as session:
+            while True:
+                _, target = await self.input_queue.get()
+
+                if target is None:
+                    break
+
+                try:
+                    self.on_receive(target, session, user_agent, proxy)
+                except AntiScrapingError:
+                    self.logger.warning("anti-scraping mechanism triggered, changing visitor...")
+
+                    user_agent, proxy = renew_agent(self.device_type)
+                    session.cookies.clear()
+
+                    await self.input_queue.put((TargetPriority.RETRY.value, target))
+
+            self.logger.info("exiting scraper...")
+
+
+async def put_seed_urls(generate_search_url, keyword_file, scrapers):
+    """ send seed search urls to scrapers in cycle
+
+        generate_search_url: function: keyword -> url, referer
+        keyword_file: opened file handle
+        scrapers: scraper actors
+    """
+    logger = logging.getLogger("rc_crawler.put_seed_urls")
+
+    scrapers_in_cycle = cycle(scrapers)
+
+    for line in keyword_file:
+        keyword = line.strip()
+
+        if keyword:
+            logger.debug("keyword: {}".format(keyword))
+            url, referer = generate_search_url(keyword)
+
+            await next(scrapers_in_cycle).send((
+                TargetPriority.DEFAULT.value,
+                Target(keyword=keyword, url=url, referer=referer, category=PageCategory.SEARCH.value)
+            ))
