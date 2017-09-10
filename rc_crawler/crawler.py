@@ -61,8 +61,8 @@ async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}
             if response.status == 200:
                 return {"outcome": "success", "html": html}
             else:
-                logger.error("non-200 response, url: {0}, request headers: {1}, status: {2}, html: {3}".format(
-                    url, response.request_info.headers, response.status, html))
+                logger.error("non-200 response, url: {0}, request headers: {1}, status: {2}, html: {3}, proxy: {4}".format(
+                    url, response.request_info.headers, response.status, html, proxy))
 
                 if response.status in PROXY_ERROR_STATUS_CODES:
                     raise ProxyError("fetch failed due to proxy problem, url: {0}, proxy: {1}".format(url, proxy))
@@ -71,11 +71,17 @@ async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}
                 else:
                     return {"outcome": "failure"}
 
+    except asyncio.TimeoutError:
+        if proxy:
+            raise ProxyError("fetch failed due to proxy problem, url: {0}, proxy: {1}".format(url, proxy))
+        else:
+            return {"outcome": "retry"}
+
     except (aiohttp.ClientConnectionError, aiohttp.ClientPayloadError) as e:
         if isinstance(e.__cause__, aiohttp.ClientProxyConnectionError):
             raise ProxyError("fetch failed due to proxy problem, url: {0}, proxy: {1}".format(url, proxy)) from e
 
-        logger.warning("need to retry fetch due to aiohttp exception, url: {0}".format(url))
+        logger.warning("need to retry fetch due to aiohttp exception, url: {0}, proxy: {1}".format(url, proxy))
         logger.exception(e)
         return {"outcome": "retry"}
 
@@ -83,7 +89,7 @@ async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}
         raise ProxyError("fetch failed due to proxy problem, url: {0}, proxy: {1}".format(url, proxy)) from e
 
     except aiohttp.ClientResponseError as e:
-        logger.error("fetch failed due to aiohttp exception, url: {0}".format(url))
+        logger.error("fetch failed due to aiohttp exception, url: {0}, proxy: {1}".format(url, proxy))
         logger.exception(e)
         return {"outcome": "failure"}
 
@@ -198,7 +204,7 @@ class Scraper:
                     break
 
                 try:
-                    self.on_receive(target, session, user_agent, proxy)
+                    await self.on_receive(target, session, user_agent, proxy)
                 except (AntiScrapingError, ProxyError) as e:
                     if isinstance(e, AntiScrapingError):
                         msg = "anti-scraping mechanism triggered"
