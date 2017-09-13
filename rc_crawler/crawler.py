@@ -52,7 +52,8 @@ async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}
     """
     logger = logging.getLogger("rc_crawler.fetch")
 
-    logger.debug("sending request to {0} with extra headers {1}".format(url, extra_headers))
+    logger.debug("sending request to {0} with extra headers {1}, proxy: {2}".format(
+        url, extra_headers, proxy))
 
     try:
         async with session.get(url, headers=extra_headers, proxy=proxy) as response:
@@ -164,8 +165,8 @@ class Scraper:
         await self.input_queue.put(*args, **kwargs)
 
     async def on_receive(self, target, session, user_agent, proxy=None):
-        self.logger.debug("downloading content from {0} url {1}, keywords: {2}, referring from {3}{4}".format(
-            target.category, target.url, target.keyword, target.referer, ", retrying" if target.retry_count else ''))
+        self.logger.debug("downloading content from {0} url {1}, keywords: {2}{3}".format(
+            target.category, target.url, target.keyword, ", retrying" if target.retry_count else ''))
 
         extra_headers = {"Referer": target.referer, "User-Agent": user_agent}
         result = await self.download(session, target.url, extra_headers=extra_headers, proxy=proxy)
@@ -192,9 +193,10 @@ class Scraper:
             self.logger.error("download failed: {}, please analyze, skip to next one".format(target.url))
 
     async def start(self):
-        self.logger.info("starting aiohttp client session with headers {}".format(HEADERS))
-
         user_agent, proxy = renew_agent(self.device_type)
+
+        self.logger.info("starting aiohttp client session with headers {0}, user agent {1} and proxy {2}".format(
+            HEADERS, user_agent, proxy))
 
         async with aiohttp.ClientSession(headers=HEADERS, json_serialize=ujson.dumps) as session:
             while True:
@@ -211,11 +213,12 @@ class Scraper:
                     else:
                         msg = "proxy error occurred"
 
-                    self.logger.warning("{}, changing proxy...".format(msg))
                     self.logger.exception(e)
+                    self.logger.warning("{0}, changing agent from {1}, {2},".format(msg, user_agent, proxy))
 
                     user_agent, proxy = renew_agent(self.device_type)
-                    session.cookies.clear()
+                    self.logger.warning("to {0}, {1}...".format(user_agent, proxy))
+                    session.cookie_jar.clear()
 
                     await self.input_queue.put((TargetPriority.RETRY.value, target))
 

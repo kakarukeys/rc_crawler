@@ -56,8 +56,6 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
     logger.info("starting crawler, run timestamp: {}".format(run_timestamp))
     logger.info("starting {} scrapers...".format(num_scrapers))
 
-    input_queue = asyncio.PriorityQueue()
-
     scrapers = [Scraper(
         run_timestamp,
         platform_module.CRAWL_DEVICE_TYPE,
@@ -71,11 +69,11 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
 
     await put_seed_urls(platform_module.generate_search_url, keyword_file, scrapers)
 
-    logger.info("putting stoppers in queue for results scrapers...")
+    logger.info("putting stoppers in queue for scrapers...")
 
-    for _ in range(num_scrapers):
+    for sc in scrapers:
         # put lower priority, so that urls are processed first
-        await input_queue.put((TargetPriority.STOPPER.value, None))
+        await sc.send((TargetPriority.STOPPER.value, None))
 
     logger.info("waiting for scrapers to complete all tasks...")
 
