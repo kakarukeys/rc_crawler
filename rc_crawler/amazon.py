@@ -3,7 +3,7 @@ from lxml.html import document_fromstring
 from .crawler import Target
 
 
-BASE_URL = "https://www.amazon.com"
+BASE_URL = "http://www.amazon.com"
 SEARCH_URL_TEMPLATE = "/s/ref=nb_sb_noss_1?url=search-alias%3Daps&field-keywords={}"
 FOLLOW_NEXT_MAX = 2
 
