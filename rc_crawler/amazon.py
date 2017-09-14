@@ -36,9 +36,9 @@ def extract_search_results(target: Target, html: str) -> dict:
             output["next_url"] = None
 
     try:
-        output["listing_urls"] = [BASE_URL + link.attrib["href"].lstrip() for link in tree.cssselect("a.aw-search-results")]
+        output["listing_urls"] = {BASE_URL + link.attrib["href"].lstrip() for link in tree.cssselect("a.aw-search-results")}
     except KeyError:
-        output["listing_urls"] = []
+        output["listing_urls"] = {}
 
     return output
 

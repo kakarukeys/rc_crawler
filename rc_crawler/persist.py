@@ -6,6 +6,8 @@ import logging
 
 import aiofiles
 
+from .fetch import FetchOutcome
+
 logger = logging.getLogger("rc_crawler.persist")
 
 STORAGE_PATH = "pages"
@@ -64,11 +66,11 @@ def back_by_storage(run_timestamp):
 
                 async with aiofiles.open(page_filepath) as f:
                     html = await f.read()
-                    return {"outcome": "success", "html": html}
+                    return {"outcome": FetchOutcome.SUCCESS, "html": html}
 
             result = await next_handler(session, url, *args, **kwargs)
 
-            if result["outcome"] == "success":
+            if result["outcome"] == FetchOutcome.SUCCESS:
                 logger.debug("save html from {1} to {0}".format(page_filepath, url))
 
                 dirpath.mkdir(parents=True, exist_ok=True)

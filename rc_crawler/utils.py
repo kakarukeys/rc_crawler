@@ -1,12 +1,11 @@
 def describe_exception(e):
     msg = str(e)
-    cause = type(e.__cause__).__name__
     description = type(e).__name__
 
-    if msg:
+    if msg and msg != "None":
         description += ": {}".format(msg)
 
-    if cause:
-        description += ", cause: {}".format(cause)
+    if e.__cause__:
+        description += ", cause: {}".format(type(e.__cause__).__name__)
 
     return description

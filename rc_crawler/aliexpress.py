@@ -10,7 +10,7 @@ FOLLOW_NEXT_MAX = 2
 CRAWL_DEVICE_TYPE = "desktop"
 
 # reqs / secs
-RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}, {"max_rate": 100, "time_period": 1*60*60}]
+RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}, {"max_rate": 150, "time_period": 1*60*60}]
 
 
 def generate_search_url(keyword: str) -> Tuple[str, str]:
@@ -70,9 +70,9 @@ def extract_search_results(target: Target, html: str) -> dict:
             output["next_url"] = None
 
     try:
-        output["listing_urls"] = ["http:" + link.attrib["href"].lstrip() for link in tree.cssselect("a.product")]
+        output["listing_urls"] = {"http:" + link.attrib["href"].lstrip() for link in tree.cssselect("a.product")}
     except KeyError:
-        output["listing_urls"] = []
+        output["listing_urls"] = set()
 
     return output
 
