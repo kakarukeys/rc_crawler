@@ -4,7 +4,3 @@ class CrawlerException(Exception):
 
 class AntiScrapingError(CrawlerException):
     """ anti-scraper mechanism is triggered """
-
-
-class ProxyError(CrawlerException):
-    """ scraping can't continue due to proxy problem """
