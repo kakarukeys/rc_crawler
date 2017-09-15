@@ -1,6 +1,6 @@
 from enum import Enum
 from itertools import cycle
-from typing import NamedTuple
+from typing import NamedTuple, Callable, Tuple, Generator, TextIO
 import asyncio
 import logging
 
@@ -186,25 +186,39 @@ class Scraper:
             self.logger.info("exiting scraper...")
 
 
-async def put_seed_urls(generate_search_url, keyword_file, scrapers):
-    """ send seed search urls to scrapers in cycle
+def gen_target_params(generate_search_url: Callable[[str], Tuple[str, str]], keyword_file: TextIO) \
+        -> Generator[dict, None, None]:
+    """ yield target params {"keyword": ... "url": ..., "referer": ...} from keywords in <keyword_file> """
+    for line in keyword_file:
+        keyword = line.strip()
 
-        generate_search_url: function: keyword -> url, referer
-        keyword_file: opened file handle
+        if keyword:
+            url, referer = generate_search_url(keyword)
+            yield {"keyword": keyword, "url": url, "referer": referer}
+
+
+async def put_seed_urls(scrapers, generate_search_url, keyword_file=None):
+    """ send seed urls to scrapers in cycle
+
         scrapers: scraper actors
+        generate_search_url:
+            if keyword_file is provided, function: keyword -> url, referer
+            if not, generator function yielding {"keyword": ... "url": ..., "referer": ...}
+        keyword_file (optional): opened file handle
     """
     logger = logging.getLogger("rc_crawler.put_seed_urls")
 
     scrapers_in_cycle = cycle(scrapers)
 
-    for line in keyword_file:
-        keyword = line.strip()
+    if keyword_file:
+        target_params = gen_target_params(generate_search_url, keyword_file)
+    else:
+        target_params = generate_search_url()
 
-        if keyword:
-            logger.debug("keyword: {}".format(keyword))
-            url, referer = generate_search_url(keyword)
+    for params in target_params:
+        logger.debug("seed keyword: {keyword}".format(**params))
 
-            await next(scrapers_in_cycle).send((
-                TargetPriority.DEFAULT.value,
-                Target(keyword=keyword, url=url, referer=referer, category=PageCategory.SEARCH.value)
-            ))
+        await next(scrapers_in_cycle).send((
+            TargetPriority.DEFAULT.value,
+            Target(category=PageCategory.SEARCH.value, **params)
+        ))

@@ -65,9 +65,10 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
 
     scraping_tasks = asyncio.ensure_future(asyncio.gather(*[sc.start() for sc in scrapers]))
 
-    logger.info("starting to generate keywords from {}".format(keyword_file.name))
+    logger.info("starting to generate seed urls{}...".format(
+        " from keyword file {} ".format(keyword_file.name) if keyword_file else ''))
 
-    await put_seed_urls(platform_module.generate_search_url, keyword_file, scrapers)
+    await put_seed_urls(scrapers, platform_module.generate_search_url, keyword_file)
 
     logger.info("putting stoppers in queue for scrapers...")
 
@@ -84,10 +85,10 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
 
 @click.command()
 @click.argument("platform")
-@click.argument("keyword_file", type=click.File('r'))
+@click.option("--keyword-file", type=click.File('r'), help="File containing seed keywords")
 @click.option("--run-timestamp", type=int, default=lambda: int(time.time()), help="Timestamp to mark this crawl")
 @click.option("--num-scrapers", type=int, default=1, help="Number of scrapers")
-def main(platform, *args, **kwargs):
+def main(platform: str, *args, **kwargs) -> None:
     """ Start crawler to mine for product data off eCommerce platform. """
     configure_logging(platform)
     platform_module = import_module('.' + platform, package="rc_crawler")

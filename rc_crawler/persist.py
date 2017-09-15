@@ -35,7 +35,11 @@ def get_filepath(url: str, run_timestamp: int) -> Tuple[Path, str]:
         returns <STORAGE_PATH>/<platform>/<run timestamp>, <base64 encoded url>.html
     """
     url_parts = urlsplit(url)
-    platform = url_parts.netloc.split('.')[1]
+    netloc_terms = url_parts.netloc.split('.')
+
+    # guess the platform name from url
+    platform = netloc_terms[1 if len(netloc_terms) > 2 else 0]
+
     concise_url = build_concise_url(url_parts)
 
     dirpath = Path(STORAGE_PATH) / platform / str(run_timestamp)
