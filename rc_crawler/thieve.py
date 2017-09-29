@@ -41,7 +41,7 @@ def _extract_product_item(item):
         return {"title": title, "price": price, "like_count": like_count}
 
 
-def extract_search_results(target: Target, html: str) -> dict:
+def extract_search_results(html: str, **kwargs) -> dict:
     """ Returns a dictionary of useful info from search results <html> """
     tree = document_fromstring(html)
     products = filter(bool, map(_extract_product_item, tree.cssselect(".product-feed .product-item")))

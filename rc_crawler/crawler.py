@@ -95,7 +95,7 @@ class Scraper:
         (platform-dependent arguments)
         device_type: pose as desktop/tablet/mobile browser?
         rate_limit_params: [{max_rate: ..., time_period: ...}, ...]
-        extractors: {page_category: function extract_<page_category>: html -> {key: value}}
+        extractors: {page_category: function extract_<page_category>: html, target, run_timestamp -> {key: value}}
     """
     def __init__(self, run_timestamp, device_type, rate_limit_params, extractors):
         actor_id = str(hex(id(self)))[-6:]   # for logging use only, may not be unique
@@ -124,7 +124,7 @@ class Scraper:
 
         if result["outcome"] == FetchOutcome.SUCCESS:
             try:
-                output = self.extractors[target.category](target, result["html"])
+                output = self.extractors[target.category](result["html"], target=target, run_timestamp=self.run_timestamp)
             except AntiScrapingError as e:
                 result = {"outcome": FetchOutcome.ANTI_SCRAPING, "reason": describe_exception(e)}
             else:
@@ -213,7 +213,11 @@ async def put_seed_urls(scrapers, generate_search_url, keyword_file=None):
     if keyword_file:
         target_params = gen_target_params(generate_search_url, keyword_file)
     else:
-        target_params = generate_search_url()
+        try:
+            target_params = generate_search_url()
+        except TypeError:
+            logger.error("you did not specify a keyword file")
+            raise
 
     for params in target_params:
         logger.debug("seed keyword: {keyword}".format(**params))

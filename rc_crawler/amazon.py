@@ -18,7 +18,7 @@ def generate_search_url(keyword: str) -> Tuple[str, str]:
     return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
 
 
-def extract_search_results(target: Target, html: str) -> dict:
+def extract_search_results(html: str, target: Target, **kwargs) -> dict:
     """ Returns a dictionary of useful info from search results <html> """
     tree = document_fromstring(html)
     output = {}
@@ -43,7 +43,7 @@ def extract_search_results(target: Target, html: str) -> dict:
     return output
 
 
-def extract_listing(target: Target, html: str) -> dict:
+def extract_listing(html: str, **kwargs) -> dict:
     """ Returns a dictionary of useful info from listing page <html> """
     tree = document_fromstring(html)
 
