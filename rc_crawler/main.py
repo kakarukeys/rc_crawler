@@ -91,7 +91,7 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
 def main(platform: str, *args, **kwargs) -> None:
     """ Start crawler to mine for product data off eCommerce platform. """
     configure_logging(platform)
-    platform_module = import_module('.' + platform, package="rc_crawler")
+    platform_module = import_module('.platforms.' + platform, package="rc_crawler")
 
     crawler = start_crawler(platform_module, *args, **kwargs)
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 
 import pytest
-import rc_crawler.bing as bing
+import rc_crawler.platforms.bing as bing
 
 
 def test_parse_video_info_string():

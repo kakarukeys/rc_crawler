@@ -1,6 +1,6 @@
 from typing import Tuple
 from lxml.html import document_fromstring
-from .crawler import Target
+from rc_crawler.crawler import Target
 
 
 BASE_URL = "http://www.amazon.com"

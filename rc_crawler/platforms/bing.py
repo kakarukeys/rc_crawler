@@ -1,12 +1,10 @@
 from datetime import datetime
-from typing import Tuple, Optional
+from typing import Tuple
 import logging
 import re
 
 from lxml.html import document_fromstring
 import dateparser
-
-from .crawler import Target
 
 logger = logging.getLogger("rc_crawler.bing")
 

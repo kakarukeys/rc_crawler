@@ -6,8 +6,7 @@ import logging
 import aiohttp
 import click
 
-from .agents import USER_AGENTS
-from .crawler import HEADERS
+from .crawler import HEADERS, USER_AGENTS
 
 fh = logging.FileHandler("proxy_tester.log")
 fh.setLevel(logging.DEBUG)

@@ -1,7 +1,7 @@
 from urllib.parse import urlsplit
 
 import pytest
-import rc_crawler.persist as ps
+import rc_crawler.crawler.persist as ps
 
 
 def test_build_concise_url():

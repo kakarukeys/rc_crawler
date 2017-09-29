@@ -1,6 +1,5 @@
 from typing import Generator
 from lxml.html import document_fromstring
-from .crawler import Target
 
 
 BASE_URL = "http://thieve.co"
