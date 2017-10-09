@@ -61,18 +61,19 @@ def back_by_storage(run_timestamp):
         returns a new coroutine that uses filesystem as cache when doing the fetching
     """
     def middleware_factory(next_handler):
-        async def middleware(session, url, *args, **kwargs):
+        async def middleware(session, url, retry, *args, **kwargs):
             dirpath, filename = get_filepath(url, run_timestamp)
             page_filepath = dirpath / filename
 
-            if page_filepath.exists():
+            if page_filepath.exists() and not retry:
                 logger.info("reading from {0} instead of fetching from {1}".format(page_filepath, url))
 
                 async with aiofiles.open(page_filepath) as f:
                     html = await f.read()
-                    return {"outcome": FetchOutcome.SUCCESS, "html": html}
+                    return {"outcome": FetchOutcome.SUCCESS, "html": html, "from_cache": True}
 
-            result = await next_handler(session, url, *args, **kwargs)
+            result = await next_handler(session, url, retry, *args, **kwargs)
+            result["from_cache"] = False
 
             if result["outcome"] == FetchOutcome.SUCCESS:
                 logger.debug("save html from {1} to {0}".format(page_filepath, url))

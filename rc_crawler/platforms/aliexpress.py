@@ -1,6 +1,8 @@
 from typing import Tuple
+
 from lxml.html import document_fromstring
-from rc_crawler.crawler import Target
+
+from rc_crawler.crawler import Target, AntiScrapingError
 
 
 BASE_URL = "http://www.aliexpress.com"
@@ -16,6 +18,11 @@ RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}, {"max_rate": 150, "time
 def generate_search_url(keyword: str) -> Tuple[str, str]:
     """ Returns search url, referer url """
     return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
+
+
+def check_if_scraping_is_blocked(html):
+    if len(html) < 14496:
+        raise AntiScrapingError("Server is returning a blocked page")
 
 
 def _extract_price_distribution(tree):
@@ -52,6 +59,8 @@ def _extract_price_distribution(tree):
 
 def extract_search_results(html: str, target: Target, **kwargs) -> dict:
     """ Returns a dictionary of useful info from search results <html> """
+    check_if_scraping_is_blocked(html)
+
     tree = document_fromstring(html)
     output = {}
 
@@ -79,6 +88,8 @@ def extract_search_results(html: str, target: Target, **kwargs) -> dict:
 
 def extract_listing(html: str, **kwargs) -> dict:
     """ Returns a dictionary of useful info from listing page <html> """
+    check_if_scraping_is_blocked(html)
+
     tree = document_fromstring(html)
 
     try:

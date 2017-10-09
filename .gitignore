@@ -102,5 +102,5 @@ ENV/
 
 # project
 seeds.txt
-pages/
+pages
 research/

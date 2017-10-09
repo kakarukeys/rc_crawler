@@ -3,7 +3,7 @@ import logging
 
 from lxml.html import document_fromstring, tostring
 
-from rc_crawler.crawler import Target
+from rc_crawler.crawler import Target, AntiScrapingError
 
 logger = logging.getLogger("rc_crawler.amazon")
 
@@ -23,6 +23,11 @@ def generate_search_url(keyword: str) -> Tuple[str, str]:
     return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
 
 
+def check_if_scraping_is_blocked(html):
+    if len(html) < 7218:
+        raise AntiScrapingError("Server is returning a blocked page")
+
+
 def _has_results(tree):
     try:
         return "sorry" not in tree.cssselect("#results h4")[0].text_content()
@@ -32,6 +37,8 @@ def _has_results(tree):
 
 def extract_search_results(html: str, target: Target, **kwargs) -> dict:
     """ Returns a dictionary of useful info from search results <html> """
+    check_if_scraping_is_blocked(html)
+
     tree = document_fromstring(html)
     output = {}
 
@@ -83,6 +90,8 @@ def extract_search_results(html: str, target: Target, **kwargs) -> dict:
 
 def extract_listing(html: str, **kwargs) -> dict:
     """ Returns a dictionary of useful info from listing page <html> """
+    check_if_scraping_is_blocked(html)
+
     tree = document_fromstring(html)
 
     try:

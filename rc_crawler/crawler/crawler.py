@@ -120,13 +120,20 @@ class Scraper:
             target.category, target.url, target.keyword, ", retrying" if target.retry_count else ''))
 
         extra_headers = {"Referer": target.referer, "User-Agent": user_agent}
-        result = await self.download(session, target.url, extra_headers=extra_headers, proxy=proxy)
+
+        result = await self.download(
+            session, target.url, retry=bool(target.retry_count), extra_headers=extra_headers, proxy=proxy
+        )
 
         if result["outcome"] == FetchOutcome.SUCCESS:
             try:
                 output = self.extractors[target.category](result["html"], target=target, run_timestamp=self.run_timestamp)
             except AntiScrapingError as e:
-                result = {"outcome": FetchOutcome.ANTI_SCRAPING, "reason": describe_exception(e)}
+                result = {
+                    "outcome": FetchOutcome.ANTI_SCRAPING,
+                    "reason": describe_exception(e),
+                    "from_cache": result["from_cache"],
+                }
             else:
                 self.logger.debug("download succeeded, harvesting from html content: {}".format(target.url))
                 await harvest(output, target, self.input_queue, self.run_timestamp)
@@ -174,7 +181,10 @@ class Scraper:
                 if result["outcome"] == FetchOutcome.MAYBE_PROXY_FAILURE and proxy_failure_count < PROXY_FAILURE_COUNT_MAX:
                     proxy_failure_count += 1
 
-                elif result["outcome"] in (FetchOutcome.ANTI_SCRAPING, FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE):
+                elif result["outcome"] in (
+                        FetchOutcome.ANTI_SCRAPING, FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE
+                    ) and not result["from_cache"]:
+
                     self.logger.warning("{0}, changing agent from {1}, {2},".format(result["outcome"].value, user_agent, proxy))
 
                     user_agent, proxy = renew_agent(self.device_type)
