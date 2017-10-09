@@ -10,12 +10,16 @@ logger = logging.getLogger("rc_crawler.amazon")
 
 BASE_URL = "http://www.amazon.com"
 SEARCH_URL_TEMPLATE = "/s/ref=nb_sb_noss?url=search-alias%3Daps&field-keywords={}"
-FOLLOW_NEXT_MAX = 6
+FOLLOW_NEXT_MAX = 5
 
 CRAWL_DEVICE_TYPE = "mobile"
 
 # reqs / secs
-RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 5}]
+RATE_LIMIT_PARAMS = [
+    {"max_rate": 2, "time_period": 10},
+    {"max_rate": 300, "time_period": 1*60*60},
+    {"max_rate": 1500, "time_period": 12*60*60},
+]
 
 
 def generate_search_url(keyword: str) -> Tuple[str, str]:
@@ -53,7 +57,7 @@ def extract_search_results(html: str, target: Target, **kwargs) -> dict:
             try:
                 next_url_button = tree.cssselect(".a-pagination > li:nth-child(2)")[0]
 
-                if "a.disabled" not in next_url_button.classes:
+                if "a-disabled" not in next_url_button.classes:
                     output["next_url"] = BASE_URL + next_url_button.cssselect('a')[0].attrib["href"].lstrip()
 
             except (IndexError, KeyError):
@@ -73,17 +77,19 @@ def extract_search_results(html: str, target: Target, **kwargs) -> dict:
                     output["listing_urls"].add(listing_url)
 
         else:
-            logger.info("multi-item row layout detected, target: {}".format(target))
             listings = tree.cssselect("#resultItems li")
 
-            for li in listings:
-                try:
-                    listing_url = BASE_URL + li.cssselect("a.sx-grid-link")[0].attrib["href"].lstrip()
-                except (IndexError, KeyError) as e:
-                    logger.warning("could not extract listing url from {0}, target: {1}".format(tostring(li), target))
-                    logger.exception(e)
-                else:
-                    output["listing_urls"].add(listing_url)
+            if listings:
+                logger.info("multi-item row layout detected, target: {}".format(target))
+
+                for li in listings:
+                    try:
+                        listing_url = BASE_URL + li.cssselect("a.sx-grid-link")[0].attrib["href"].lstrip()
+                    except (IndexError, KeyError) as e:
+                        logger.warning("could not extract listing url from {0}, target: {1}".format(tostring(li), target))
+                        logger.exception(e)
+                    else:
+                        output["listing_urls"].add(listing_url)
 
     return output
 
