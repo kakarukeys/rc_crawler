@@ -72,7 +72,7 @@ def back_by_storage(run_timestamp):
                     html = await f.read()
                     return {"outcome": FetchOutcome.SUCCESS, "html": html, "from_cache": True}
 
-            result = await next_handler(session, url, retry, *args, **kwargs)
+            result = await next_handler(session, url, *args, **kwargs)
             result["from_cache"] = False
 
             if result["outcome"] == FetchOutcome.SUCCESS:

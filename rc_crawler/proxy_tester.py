@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 import aiohttp
+import async_timeout
 import click
 
 from .crawler import HEADERS, USER_AGENTS
@@ -23,7 +24,7 @@ logger2.setLevel(logging.DEBUG)
 logger2.addHandler(fh)
 
 
-NUM_THREADS = 10
+NUM_THREADS = 80
 HEADERS["User-Agent"] = USER_AGENTS["desktop"][0]
 
 TEST_URLS = [
@@ -73,14 +74,15 @@ async def test_connect(input_queue):
                 logger.info("sending request to {0} with proxy {1}...".format(url, proxy))
 
                 try:
-                    async with session.get(url, proxy=proxy) as response:
-                        await response.read()
+                    with async_timeout.timeout(20):
+                        async with session.get(url, proxy=proxy) as response:
+                            await response.read()
 
-                        if response.status == 200:
-                            logger.info("proxy: {0}, url: {1}, success".format(proxy, url))
-                        else:
-                            logger.warning("proxy: {0}, url: {1}, issue: {2}".format(proxy, url, response.status))
-                            error_count += 1
+                            if response.status == 200:
+                                logger.info("proxy: {0}, url: {1}, success".format(proxy, url))
+                            else:
+                                logger.warning("proxy: {0}, url: {1}, issue: {2}".format(proxy, url, response.status))
+                                error_count += 1
 
                 except Exception as e:
                     logger.warning("proxy: {0}, url: {1}, error: {2} because of {3}, {4}".format(

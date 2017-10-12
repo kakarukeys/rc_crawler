@@ -15,7 +15,7 @@ SEARCH_URL_TEMPLATE = "/videos/search?q={}&FORM=BVLH1"
 CRAWL_DEVICE_TYPE = "desktop"
 
 # reqs / secs
-RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 5}]
+RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}]
 
 VIDEO_INFO_RE = re.compile(r"(?P<title>[^·]+) from [^·]+|(?P<views>[\d,]+)\+? views|uploaded on (?P<uploaded_on>[^·]+)")
 

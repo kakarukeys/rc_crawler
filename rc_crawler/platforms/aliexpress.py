@@ -12,7 +12,10 @@ FOLLOW_NEXT_MAX = 2
 CRAWL_DEVICE_TYPE = "desktop"
 
 # reqs / secs
-RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}, {"max_rate": 150, "time_period": 1*60*60}]
+RATE_LIMIT_PARAMS = [
+    {"max_rate": 2, "time_period": 10},
+    {"max_rate": 150, "time_period": 1*60*60}
+]
 
 
 def generate_search_url(keyword: str) -> Tuple[str, str]:

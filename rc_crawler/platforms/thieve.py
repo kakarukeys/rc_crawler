@@ -7,7 +7,7 @@ SEARCH_URL_TEMPLATE = "/?filter=Most%20Popular"
 CRAWL_DEVICE_TYPE = "desktop"
 
 # reqs / secs
-RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 5}]
+RATE_LIMIT_PARAMS = [{"max_rate": 2, "time_period": 10}]
 
 
 def generate_search_url() -> Generator[dict, None, None]:

@@ -25,7 +25,7 @@ class FetchOutcome(Enum):
 
 
 async def fetch(session: aiohttp.ClientSession, url: str, extra_headers: dict={}, proxy: str=None) -> None:
-    """ fetch html content fromR <url>
+    """ fetch html content from <url>
         returns {"outcome": ..., (optional) "html": ..., (optional) "reason": "reason for failure"}
     """
     logger = logging.getLogger("rc_crawler.fetch")
