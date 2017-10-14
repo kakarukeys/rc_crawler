@@ -4,6 +4,9 @@ rc_crawler
 
 Analysis of the results of 13th Malaysian General Election
 
+    sudo apt-get install tesseract-ocr
+    sudo apt-get install libjpeg-dev
+
 Using Paver
 -----------
 
