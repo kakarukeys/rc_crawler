@@ -1,7 +1,7 @@
 from typing import Tuple
 import logging
 
-from lxml.html import document_fromstring, tostring
+from lxml.html import document_fromstring, tostring, HtmlElement
 
 from rc_crawler.crawler import Target, AntiScrapingError
 
@@ -17,7 +17,7 @@ CRAWL_DEVICE_TYPE = "mobile"
 # reqs / secs
 RATE_LIMIT_PARAMS = [
     {"max_rate": 2, "time_period": 10},
-    {"max_rate": 300, "time_period": 1*60*60},
+    {"max_rate": 200, "time_period": 1*60*60},
     {"max_rate": 1500, "time_period": 12*60*60},
 ]
 
@@ -27,9 +27,35 @@ def generate_search_url(keyword: str) -> Tuple[str, str]:
     return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
 
 
-def check_if_scraping_is_blocked(html):
-    if len(html) < 7218:
-        raise AntiScrapingError("Server is returning a blocked page")
+def _extract_captcha_challenge(tree, **kwargs):
+    """ Returns information needed for answering a captcha challenge """
+    try:
+        form = tree.cssselect("form")[0]
+        captcha_image_url = form.cssselect("img")[0].attrib["src"]
+    except (IndexError, KeyError) as e:
+        raise AntiScrapingError("Unable to find captcha image url on the challenge page") from e
+
+    return {
+        "captcha_image_url": captcha_image_url,
+
+        "submission_form": {
+            "action": BASE_URL + form.action,
+            "method": form.method,
+            "data": dict(form.fields),
+        }
+    }
+
+
+def read_html(extractor):
+    def wrapped(html, *args, **kwargs):
+        if len(html) < 7218:
+            extractor = _extract_captcha_challenge
+
+        tree = document_fromstring(html)
+
+        return extractor(tree, *args, **kwargs)
+
+    return wrapped
 
 
 def _has_results(tree):
@@ -39,11 +65,9 @@ def _has_results(tree):
         return True
 
 
-def extract_search_results(html: str, target: Target, **kwargs) -> dict:
-    """ Returns a dictionary of useful info from search results <html> """
-    check_if_scraping_is_blocked(html)
-
-    tree = document_fromstring(html)
+@read_html
+def extract_search_results(tree: HtmlElement, target: Target, **kwargs) -> dict:
+    """ Returns a dictionary of useful info from search results <tree> """
     output = {}
 
     if _has_results(tree):
@@ -76,30 +100,16 @@ def extract_search_results(html: str, target: Target, **kwargs) -> dict:
                 else:
                     output["listing_urls"].add(listing_url)
 
-        else:
-            listings = tree.cssselect("#resultItems li")
-
-            if listings:
-                logger.info("multi-item row layout detected, target: {}".format(target))
-
-                for li in listings:
-                    try:
-                        listing_url = BASE_URL + li.cssselect("a.sx-grid-link")[0].attrib["href"].lstrip()
-                    except (IndexError, KeyError) as e:
-                        logger.warning("could not extract listing url from {0}, target: {1}".format(tostring(li), target))
-                        logger.exception(e)
-                    else:
-                        output["listing_urls"].add(listing_url)
+        elif tree.cssselect("#resultItems li"):
+            logger.error("multi-item row layout detected, for which listing urls extraction logic is not implemented, target: {}".format(
+                target))
 
     return output
 
 
-def extract_listing(html: str, **kwargs) -> dict:
-    """ Returns a dictionary of useful info from listing page <html> """
-    check_if_scraping_is_blocked(html)
-
-    tree = document_fromstring(html)
-
+@read_html
+def extract_listing(tree: HtmlElement, **kwargs) -> dict:
+    """ Returns a dictionary of useful info from listing page <tree> """
     try:
         title = tree.cssselect("title")[0].text_content()
     except IndexError:

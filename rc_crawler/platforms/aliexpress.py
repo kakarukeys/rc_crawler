@@ -1,6 +1,6 @@
 from typing import Tuple
 
-from lxml.html import document_fromstring
+from lxml.html import document_fromstring, HtmlElement
 
 from rc_crawler.crawler import Target, AntiScrapingError
 
@@ -23,9 +23,16 @@ def generate_search_url(keyword: str) -> Tuple[str, str]:
     return BASE_URL + SEARCH_URL_TEMPLATE.format(keyword.replace(' ', '+')), BASE_URL + '/'
 
 
-def check_if_scraping_is_blocked(html):
-    if len(html) < 14496:
-        raise AntiScrapingError("Server is returning a blocked page")
+def read_html(extractor):
+    def wrapped(html, *args, **kwargs):
+        if len(html) < 14496:
+            raise AntiScrapingError("Server is returning a blocked page")
+
+        tree = document_fromstring(html)
+
+        return extractor(tree, *args, **kwargs)
+
+    return wrapped
 
 
 def _extract_price_distribution(tree):
@@ -60,11 +67,9 @@ def _extract_price_distribution(tree):
     return price_distribution
 
 
-def extract_search_results(html: str, target: Target, **kwargs) -> dict:
-    """ Returns a dictionary of useful info from search results <html> """
-    check_if_scraping_is_blocked(html)
-
-    tree = document_fromstring(html)
+@read_html
+def extract_search_results(tree: HtmlElement, target: Target, **kwargs) -> dict:
+    """ Returns a dictionary of useful info from search results <tree> """
     output = {}
 
     try:
@@ -89,12 +94,9 @@ def extract_search_results(html: str, target: Target, **kwargs) -> dict:
     return output
 
 
-def extract_listing(html: str, **kwargs) -> dict:
-    """ Returns a dictionary of useful info from listing page <html> """
-    check_if_scraping_is_blocked(html)
-
-    tree = document_fromstring(html)
-
+@read_html
+def extract_listing(tree: HtmlElement, **kwargs) -> dict:
+    """ Returns a dictionary of useful info from listing page <tree> """
     try:
         title = tree.cssselect("title")[0].text_content()
     except IndexError:
