@@ -1,6 +1,6 @@
 from enum import Enum
 from itertools import cycle
-from typing import NamedTuple, Callable, Tuple, Generator, TextIO
+from typing import NamedTuple, Callable, List, Tuple, Generator, TextIO, Union
 import asyncio
 import logging
 
@@ -8,6 +8,7 @@ import aiohttp
 import ujson
 
 from .agents import renew_agent
+from .captcha import solve_captcha
 from .exceptions import AntiScrapingError
 from .fetch import fetch, FetchOutcome
 from .persist import back_by_storage
@@ -30,14 +31,16 @@ class Target(NamedTuple):
     keyword: str
     url: str
     referer: str
+    params: Union[dict, List[tuple], str, None] = None
     category: str = None
     retry_count: int = 0
     follow_next_count: int = 0
 
 
 class TargetPriority(Enum):
-    DEFAULT = 0
-    RETRY = 1
+    ANSWER_CHALLENGE = 0
+    DEFAULT = 1
+    RETRY = 2
     STOPPER = 20
 
 
@@ -115,6 +118,85 @@ class Scraper:
     async def send(self, *args, **kwargs):
         await self.input_queue.put(*args, **kwargs)
 
+    async def answer_captcha_challenge(self, challenge, referer, session, user_agent, proxy=None):
+        captcha_image_url = challenge["captcha_image_url"]
+
+        extra_headers = {"Referer": referer, "User-Agent": user_agent}
+        result = await fetch(session, captcha_image_url, extra_headers=extra_headers, proxy=proxy, filetype="binary")
+
+        if result["outcome"] == FetchOutcome.SUCCESS:
+            try:
+                answer = solve_captcha(result["content"])
+            except ValueError as e:
+                return {"outcome": "failure", "reason": str(e)}
+
+            if answer:
+                submission_form = challenge["submission_form"]
+
+                if submission_form["method"] == "GET":
+                    # the input field which has value None is the answer field
+                    query_params = {k: v or answer for k, v in submission_form["data"].items()}
+
+                    self.logger.info("submission to captcha challenge {0} is {1}".format(captcha_image_url, query_params))
+
+                    await self.input_queue.put((TargetPriority.ANSWER_CHALLENGE.value, Target(
+                        keyword='',
+                        url=submission_form["action"],
+                        referer=referer,
+                        params=query_params,
+                    )))
+                    return {"outcome": "success"}
+                else:
+                    return {"outcome": "failure", "reason": "non-GET request is not yet supported"}
+            else:
+                return {"outcome": "failure", "reason": "unable to recognize characters in captcha"}
+        else:
+            return {"outcome": "failure", "reason": "failed to fetch captcha image due to {}".format(result["reason"])}
+
+    async def handle_download_success(self, target, html, from_cache, session, user_agent, proxy=None):
+        """ extract and harvest <html>, answer any captcha challenge presented """
+        try:
+            output = self.extractors[target.category](html, target=target, run_timestamp=self.run_timestamp)
+        except AntiScrapingError as e:
+            return {
+                "outcome": FetchOutcome.ANTI_SCRAPING,
+                "reason": describe_exception(e),
+                "switch_agent": not from_cache,
+            }
+        else:
+            if "captcha_image_url" in output:
+                if from_cache:
+                    return {
+                        "outcome": FetchOutcome.ANTI_SCRAPING,
+                        "reason": "captcha challenge, from saved page",
+                        "switch_agent": False,
+                    }
+                else:
+                    result = await self.answer_captcha_challenge(
+                        challenge=output,
+                        referer=target.url,
+                        session=session,
+                        user_agent=user_agent,
+                        proxy=proxy
+                    )
+
+                    if result["outcome"] == "success":
+                        return {
+                            "outcome": FetchOutcome.ANTI_SCRAPING,
+                            "reason": "captcha challenge, answered",
+                            "switch_agent": False,
+                        }
+                    else:
+                        return {
+                            "outcome": FetchOutcome.ANTI_SCRAPING,
+                            "reason": "captcha challenge, unanswered due to {}".format(result["reason"]),
+                            "switch_agent": True,
+                        }
+            else:
+                self.logger.debug("extraction succeeded, harvesting from extracted content: {}".format(target.url))
+                await harvest(output, target, self.input_queue, self.run_timestamp)
+                return {"outcome": FetchOutcome.SUCCESS}
+
     async def on_receive(self, target, session, user_agent, proxy=None):
         self.logger.debug("downloading content from {0} url {1}, keywords: {2}{3}".format(
             target.category, target.url, target.keyword, ", retrying" if target.retry_count else ''))
@@ -122,22 +204,19 @@ class Scraper:
         extra_headers = {"Referer": target.referer, "User-Agent": user_agent}
 
         result = await self.download(
-            session, target.url, retry=bool(target.retry_count), extra_headers=extra_headers, proxy=proxy
+            session,
+            target.url,
+            retry=bool(target.retry_count),
+            extra_headers=extra_headers,
+            proxy=proxy,
+            params=target.params
         )
 
-        if result["outcome"] == FetchOutcome.SUCCESS:
-            try:
-                output = self.extractors[target.category](result["html"], target=target, run_timestamp=self.run_timestamp)
-            except AntiScrapingError as e:
-                result = {
-                    "outcome": FetchOutcome.ANTI_SCRAPING,
-                    "reason": describe_exception(e),
-                    "from_cache": result["from_cache"],
-                }
-            else:
-                self.logger.debug("download succeeded, harvesting from html content: {}".format(target.url))
-                await harvest(output, target, self.input_queue, self.run_timestamp)
-
+        if result["outcome"] == FetchOutcome.SUCCESS and target.category:
+            # possibly changing the result upon further scrutiny
+            result = await self.handle_download_success(
+                target, result["content"], result["from_cache"], session, user_agent, proxy
+            )
         elif result["outcome"] == FetchOutcome.FAILURE:
             self.logger.error("download failed: {0}, please analyze: {1}, skip to next one".format(target.url, result["reason"]))
 
@@ -181,9 +260,8 @@ class Scraper:
                 if result["outcome"] == FetchOutcome.MAYBE_PROXY_FAILURE and proxy_failure_count < PROXY_FAILURE_COUNT_MAX:
                     proxy_failure_count += 1
 
-                elif result["outcome"] in (
-                        FetchOutcome.ANTI_SCRAPING, FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE
-                    ) and not result["from_cache"]:
+                elif result["outcome"] == FetchOutcome.ANTI_SCRAPING and result["switch_agent"] or \
+                    result in (FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE):
 
                     self.logger.warning("{0}, changing agent from {1}, {2},".format(result["outcome"].value, user_agent, proxy))
 

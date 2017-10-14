@@ -81,7 +81,7 @@ def back_by_storage(run_timestamp):
                 dirpath.mkdir(parents=True, exist_ok=True)
 
                 async with aiofiles.open(page_filepath, 'w') as f:
-                    await f.write(result["html"])
+                    await f.write(result["content"])
 
             return result
 
