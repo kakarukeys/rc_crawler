@@ -4,24 +4,11 @@ from typing import NamedTuple, Callable, List, Tuple, Generator, TextIO, Union
 import asyncio
 import logging
 
-import aiohttp
-import ujson
-
-from .agents import renew_agent
+from rc_crawler.browser import Browser, FetchOutcome
+from rc_crawler.utils import describe_exception
 from .captcha import solve_captcha
 from .exceptions import AntiScrapingError
-from .fetch import fetch, FetchOutcome
-from .persist import back_by_storage
-from .rate_limiter import limit_actions
-from .utils import describe_exception
 
-
-HEADERS = {
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate',
-    'Accept-Language': 'en-US,en;q=0.5',
-    'Connection': 'keep-alive',
-}
 
 RETRY_MAX = 2
 PROXY_FAILURE_COUNT_MAX = 2
@@ -96,47 +83,39 @@ class Scraper:
 
         (platform-dependent arguments)
         device_type: pose as desktop/tablet/mobile browser?
-        rate_limit_params: [{max_rate: ..., time_period: ...}, ...]
         extractors: {page_category: function extract_<page_category>: html, target, run_timestamp -> {key: value}}
+        middlewares: a list of decorators for Browser object's fetch method
     """
-    def __init__(self, run_timestamp, device_type, rate_limit_params, extractors, captcha_ocr_config=None):
+    def __init__(self, run_timestamp, device_type, extractors, middlewares=[], captcha_solver_config=None):
         actor_id = str(hex(id(self)))[-6:]   # for logging use only, may not be unique
         self.logger = logging.getLogger("rc_crawler.scrape.{}".format(actor_id))
 
         self.input_queue = asyncio.PriorityQueue()  # actor inbox
 
         self.run_timestamp = run_timestamp
-        self.device_type = device_type
         self.extractors = extractors
-        self.captcha_ocr_config = captcha_ocr_config
+        self.captcha_solver_config = captcha_solver_config
+
+        self.browser = Browser(device_type)
+        self.download = self.browser.fetch
+        self.middlewares = middlewares
 
         # install middlewares
-        self.download = back_by_storage(run_timestamp)(
-            limit_actions(rate_limit_params)(
-                fetch))
-
-        self.session = None
-        self.user_agent = None
-        self.proxy = None
+        for f in self.middlewares:
+            self.download = f(self.download)
 
     async def send(self, *args, **kwargs):
         await self.input_queue.put(*args, **kwargs)
 
     async def answer_captcha_challenge(self, challenge, referer):
-        extra_headers = {"Referer": referer, "User-Agent": self.user_agent}
+        extra_headers = {"Referer": referer}
         captcha_image_url = challenge["captcha_image_url"]
 
-        fetch_result = await fetch(
-            self.session,
-            captcha_image_url,
-            extra_headers=extra_headers,
-            proxy=self.proxy,
-            filetype="binary"
-        )
+        fetch_result = await self.browser.fetch(captcha_image_url, extra_headers=extra_headers, filetype="binary")
 
         if fetch_result["outcome"] == FetchOutcome.SUCCESS:
             try:
-                answer = await solve_captcha(fetch_result["content"], self.captcha_ocr_config)
+                answer = await solve_captcha(fetch_result["content"], self.captcha_solver_config)
             except ValueError as e:
                 challenge_result = {"outcome": "failure", "reason": str(e)}
 
@@ -149,13 +128,8 @@ class Scraper:
 
                     self.logger.info("submission to captcha challenge {0} is {1}".format(captcha_image_url, query_params))
 
-                    await fetch(
-                        self.session,
-                        url=submission_form["action"],
-                        params=query_params,
-                        extra_headers=extra_headers,
-                        proxy=self.proxy,
-                    )
+                    await self.browser.fetch(url=submission_form["action"], params=query_params, extra_headers=extra_headers)
+
                     challenge_result = {"outcome": "success"}
                 else:
                     challenge_result = {"outcome": "failure", "reason": "non-GET request is not yet supported"}
@@ -212,15 +186,10 @@ class Scraper:
         self.logger.debug("downloading content from {0} url {1}, keywords: {2}{3}".format(
             target.category or '', target.url, target.keyword, ", retrying" if target.retry_count else ''))
 
-        extra_headers = {"Referer": target.referer, "User-Agent": self.user_agent}
+        extra_headers = {"Referer": target.referer}
 
         result = await self.download(
-            self.session,
-            target.url,
-            read_from_cache=not target.retry_count,
-            extra_headers=extra_headers,
-            proxy=self.proxy,
-            params=target.params
+            target.url, params=target.params, read_from_cache=not target.retry_count, extra_headers=extra_headers
         )
 
         if result["outcome"] == FetchOutcome.SUCCESS and target.category:
@@ -251,13 +220,11 @@ class Scraper:
         return result
 
     async def start(self):
-        self.user_agent, self.proxy = renew_agent(self.device_type)
-        proxy_failure_count = 0
+        async with self.browser:
+            self.logger.info("starting browser {}".format(self.browser))
 
-        self.logger.info("starting aiohttp client session with headers {0}, user agent {1} and proxy {2}".format(
-            HEADERS, self.user_agent, self.proxy))
+            proxy_failure_count = 0
 
-        async with aiohttp.ClientSession(headers=HEADERS, json_serialize=ujson.dumps) as self.session:
             while True:
                 _, target = await self.input_queue.get()
 
@@ -272,14 +239,12 @@ class Scraper:
                 elif result["outcome"] == FetchOutcome.ANTI_SCRAPING and result["switch_agent"] or \
                     result["outcome"] in (FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE):
 
-                    self.logger.warning("{0}, changing agent from {1}, {2},".format(
-                        result["outcome"].value, self.user_agent, self.proxy))
+                    self.logger.warning("{0}, changing browser from {1}".format(result["outcome"].value, self.browser))
 
-                    self.user_agent, self.proxy = renew_agent(self.device_type)
-                    self.session.cookie_jar.clear()
+                    self.browser.switch_agent()
                     proxy_failure_count = 0
 
-                    self.logger.warning("to {0}, {1}...".format(self.user_agent, self.proxy))
+                    self.logger.warning("to {}...".format(self.browser))
 
             self.logger.info("exiting scraper...")
 

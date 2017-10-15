@@ -7,7 +7,7 @@ import aiohttp
 import async_timeout
 import click
 
-from .crawler import HEADERS, USER_AGENTS
+from .browser import HEADERS, USER_AGENTS
 
 fh = logging.FileHandler("proxy_tester.log")
 fh.setLevel(logging.DEBUG)

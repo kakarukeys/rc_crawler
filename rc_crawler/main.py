@@ -8,6 +8,7 @@ import time
 
 import click
 
+from .browser import back_by_storage, limit_actions
 from .crawler import put_seed_urls, TargetPriority, Scraper
 
 
@@ -59,9 +60,9 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
     scrapers = [Scraper(
         run_timestamp,
         platform_module.CRAWL_DEVICE_TYPE,
-        platform_module.RATE_LIMIT_PARAMS,
         get_extractors(platform_module),
-        captcha_ocr_config=getattr(platform_module, "CAPTCHA_OCR_CONFIG", None)
+        middlewares=[limit_actions(platform_module.RATE_LIMIT_PARAMS), back_by_storage(run_timestamp)],
+        captcha_solver_config=getattr(platform_module, "CAPTCHA_SOLVER_CONFIG", None)
     ) for i in range(num_scrapers)]
 
     scraping_tasks = asyncio.ensure_future(asyncio.gather(*[sc.start() for sc in scrapers]))

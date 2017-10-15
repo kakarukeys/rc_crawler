@@ -15,9 +15,9 @@ def example_captcha(request):
 
 def test_solve_captcha(example_captcha):
     with pytest.raises(ValueError):
-        cp.solve_captcha(b'', config="-psm 6")
+        cp.solve_captcha_ocr(b'', config="-psm 6")
 
     with pytest.raises(ValueError):
-        cp.solve_captcha(b'x', config="-psm 6")
+        cp.solve_captcha_ocr(b'x', config="-psm 6")
 
-    assert cp.solve_captcha(example_captcha, config="-psm 6") == "MJGPLP"
+    assert cp.solve_captcha_ocr(example_captcha, config="-psm 6") == "MJGPLP"

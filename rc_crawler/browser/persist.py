@@ -6,7 +6,7 @@ import logging
 
 import aiofiles
 
-from .fetch import FetchOutcome
+from .browser import FetchOutcome
 
 logger = logging.getLogger("rc_crawler.persist")
 
@@ -61,7 +61,7 @@ def back_by_storage(run_timestamp):
         returns a new coroutine that uses filesystem as cache when doing the fetching
     """
     def middleware_factory(next_handler):
-        async def middleware(session, url, *args, read_from_cache=True, **kwargs):
+        async def middleware(url, *args, read_from_cache=True, **kwargs):
             dirpath, filename = get_filepath(url, run_timestamp)
             page_filepath = dirpath / filename
 
@@ -72,7 +72,7 @@ def back_by_storage(run_timestamp):
                     html = await f.read()
                     return {"outcome": FetchOutcome.SUCCESS, "html": html, "from_cache": True}
 
-            result = await next_handler(session, url, *args, **kwargs)
+            result = await next_handler(url, *args, **kwargs)
             result["from_cache"] = False
 
             if result["outcome"] == FetchOutcome.SUCCESS:

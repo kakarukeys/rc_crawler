@@ -21,7 +21,7 @@ RATE_LIMIT_PARAMS = [
     {"max_rate": 1500, "time_period": 12*60*60},
 ]
 
-CAPTCHA_OCR_CONFIG = "-psm 6 uppercase_letters"
+CAPTCHA_SOLVER_CONFIG = "-psm 6 uppercase_letters"
 
 
 def generate_search_url(keyword: str) -> Tuple[str, str]:
