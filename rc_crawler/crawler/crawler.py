@@ -136,7 +136,7 @@ class Scraper:
 
         if fetch_result["outcome"] == FetchOutcome.SUCCESS:
             try:
-                answer = solve_captcha(fetch_result["content"], self.captcha_ocr_config)
+                answer = await solve_captcha(fetch_result["content"], self.captcha_ocr_config)
             except ValueError as e:
                 challenge_result = {"outcome": "failure", "reason": str(e)}
 
