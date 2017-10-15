@@ -21,6 +21,8 @@ RATE_LIMIT_PARAMS = [
     {"max_rate": 1500, "time_period": 12*60*60},
 ]
 
+CAPTCHA_OCR_CONFIG = "-psm 6 uppercase_letters"
+
 
 def generate_search_url(keyword: str) -> Tuple[str, str]:
     """ Returns search url, referer url """
@@ -49,11 +51,13 @@ def _extract_captcha_challenge(tree, **kwargs):
 def read_html(extractor):
     def wrapped(html, *args, **kwargs):
         if len(html) < 7218:
-            extractor = _extract_captcha_challenge
+            extractor_to_use = _extract_captcha_challenge
+        else:
+            extractor_to_use = extractor
 
         tree = document_fromstring(html)
 
-        return extractor(tree, *args, **kwargs)
+        return extractor_to_use(tree, *args, **kwargs)
 
     return wrapped
 

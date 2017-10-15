@@ -6,6 +6,7 @@ Analysis of the results of 13th Malaysian General Election
 
     sudo apt-get install tesseract-ocr
     sudo apt-get install libjpeg-dev
+    echo "tessedit_char_whitelist ABCDEFGHIJKLMNOPQRSTUVWXYZ" | sudo tee /usr/share/tesseract-ocr/tessdata/configs/uppercase_letters
 
 Using Paver
 -----------

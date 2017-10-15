@@ -38,9 +38,8 @@ class Target(NamedTuple):
 
 
 class TargetPriority(Enum):
-    ANSWER_CHALLENGE = 0
-    DEFAULT = 1
-    RETRY = 2
+    DEFAULT = 0
+    RETRY = 1
     STOPPER = 20
 
 
@@ -100,7 +99,7 @@ class Scraper:
         rate_limit_params: [{max_rate: ..., time_period: ...}, ...]
         extractors: {page_category: function extract_<page_category>: html, target, run_timestamp -> {key: value}}
     """
-    def __init__(self, run_timestamp, device_type, rate_limit_params, extractors):
+    def __init__(self, run_timestamp, device_type, rate_limit_params, extractors, captcha_ocr_config=None):
         actor_id = str(hex(id(self)))[-6:]   # for logging use only, may not be unique
         self.logger = logging.getLogger("rc_crawler.scrape.{}".format(actor_id))
 
@@ -109,26 +108,37 @@ class Scraper:
         self.run_timestamp = run_timestamp
         self.device_type = device_type
         self.extractors = extractors
+        self.captcha_ocr_config = captcha_ocr_config
 
         # install middlewares
         self.download = back_by_storage(run_timestamp)(
             limit_actions(rate_limit_params)(
                 fetch))
 
+        self.session = None
+        self.user_agent = None
+        self.proxy = None
+
     async def send(self, *args, **kwargs):
         await self.input_queue.put(*args, **kwargs)
 
-    async def answer_captcha_challenge(self, challenge, referer, session, user_agent, proxy=None):
+    async def answer_captcha_challenge(self, challenge, referer):
+        extra_headers = {"Referer": referer, "User-Agent": self.user_agent}
         captcha_image_url = challenge["captcha_image_url"]
 
-        extra_headers = {"Referer": referer, "User-Agent": user_agent}
-        result = await fetch(session, captcha_image_url, extra_headers=extra_headers, proxy=proxy, filetype="binary")
+        fetch_result = await fetch(
+            self.session,
+            captcha_image_url,
+            extra_headers=extra_headers,
+            proxy=self.proxy,
+            filetype="binary"
+        )
 
-        if result["outcome"] == FetchOutcome.SUCCESS:
+        if fetch_result["outcome"] == FetchOutcome.SUCCESS:
             try:
-                answer = solve_captcha(result["content"])
+                answer = solve_captcha(fetch_result["content"], self.captcha_ocr_config)
             except ValueError as e:
-                return {"outcome": "failure", "reason": str(e)}
+                challenge_result = {"outcome": "failure", "reason": str(e)}
 
             if answer:
                 submission_form = challenge["submission_form"]
@@ -139,26 +149,30 @@ class Scraper:
 
                     self.logger.info("submission to captcha challenge {0} is {1}".format(captcha_image_url, query_params))
 
-                    await self.input_queue.put((TargetPriority.ANSWER_CHALLENGE.value, Target(
-                        keyword='',
+                    await fetch(
+                        self.session,
                         url=submission_form["action"],
-                        referer=referer,
                         params=query_params,
-                    )))
-                    return {"outcome": "success"}
+                        extra_headers=extra_headers,
+                        proxy=self.proxy,
+                    )
+                    challenge_result = {"outcome": "success"}
                 else:
-                    return {"outcome": "failure", "reason": "non-GET request is not yet supported"}
+                    challenge_result = {"outcome": "failure", "reason": "non-GET request is not yet supported"}
             else:
-                return {"outcome": "failure", "reason": "unable to recognize characters in captcha"}
+                challenge_result = {"outcome": "failure", "reason": "unable to recognize characters in captcha"}
         else:
-            return {"outcome": "failure", "reason": "failed to fetch captcha image due to {}".format(result["reason"])}
+            challenge_result = {"outcome": "failure", "reason": "failed to fetch captcha image due to {}".format(
+                fetch_result["reason"])}
 
-    async def handle_download_success(self, target, html, from_cache, session, user_agent, proxy=None):
+        return challenge_result
+
+    async def handle_download_success(self, target, html, from_cache):
         """ extract and harvest <html>, answer any captcha challenge presented """
         try:
             output = self.extractors[target.category](html, target=target, run_timestamp=self.run_timestamp)
         except AntiScrapingError as e:
-            return {
+            amended_result = {
                 "outcome": FetchOutcome.ANTI_SCRAPING,
                 "reason": describe_exception(e),
                 "switch_agent": not from_cache,
@@ -166,28 +180,23 @@ class Scraper:
         else:
             if "captcha_image_url" in output:
                 if from_cache:
-                    return {
+                    amended_result = {
                         "outcome": FetchOutcome.ANTI_SCRAPING,
                         "reason": "captcha challenge, from saved page",
                         "switch_agent": False,
                     }
                 else:
-                    result = await self.answer_captcha_challenge(
-                        challenge=output,
-                        referer=target.url,
-                        session=session,
-                        user_agent=user_agent,
-                        proxy=proxy
-                    )
+                    self.logger.info("captcha detected at {}, attempting to answer it...".format(target.url))
+                    result = await self.answer_captcha_challenge(challenge=output, referer=target.url)
 
                     if result["outcome"] == "success":
-                        return {
+                        amended_result = {
                             "outcome": FetchOutcome.ANTI_SCRAPING,
                             "reason": "captcha challenge, answered",
                             "switch_agent": False,
                         }
                     else:
-                        return {
+                        amended_result = {
                             "outcome": FetchOutcome.ANTI_SCRAPING,
                             "reason": "captcha challenge, unanswered due to {}".format(result["reason"]),
                             "switch_agent": True,
@@ -195,28 +204,28 @@ class Scraper:
             else:
                 self.logger.debug("extraction succeeded, harvesting from extracted content: {}".format(target.url))
                 await harvest(output, target, self.input_queue, self.run_timestamp)
-                return {"outcome": FetchOutcome.SUCCESS}
+                amended_result = {"outcome": FetchOutcome.SUCCESS}
 
-    async def on_receive(self, target, session, user_agent, proxy=None):
+            return amended_result
+
+    async def on_receive(self, target):
         self.logger.debug("downloading content from {0} url {1}, keywords: {2}{3}".format(
-            target.category, target.url, target.keyword, ", retrying" if target.retry_count else ''))
+            target.category or '', target.url, target.keyword, ", retrying" if target.retry_count else ''))
 
-        extra_headers = {"Referer": target.referer, "User-Agent": user_agent}
+        extra_headers = {"Referer": target.referer, "User-Agent": self.user_agent}
 
         result = await self.download(
-            session,
+            self.session,
             target.url,
-            retry=bool(target.retry_count),
+            read_from_cache=not target.retry_count,
             extra_headers=extra_headers,
-            proxy=proxy,
+            proxy=self.proxy,
             params=target.params
         )
 
         if result["outcome"] == FetchOutcome.SUCCESS and target.category:
             # possibly changing the result upon further scrutiny
-            result = await self.handle_download_success(
-                target, result["content"], result["from_cache"], session, user_agent, proxy
-            )
+            result = await self.handle_download_success(target, result["content"], result["from_cache"])
         elif result["outcome"] == FetchOutcome.FAILURE:
             self.logger.error("download failed: {0}, please analyze: {1}, skip to next one".format(target.url, result["reason"]))
 
@@ -242,34 +251,35 @@ class Scraper:
         return result
 
     async def start(self):
-        user_agent, proxy = renew_agent(self.device_type)
+        self.user_agent, self.proxy = renew_agent(self.device_type)
         proxy_failure_count = 0
 
         self.logger.info("starting aiohttp client session with headers {0}, user agent {1} and proxy {2}".format(
-            HEADERS, user_agent, proxy))
+            HEADERS, self.user_agent, self.proxy))
 
-        async with aiohttp.ClientSession(headers=HEADERS, json_serialize=ujson.dumps) as session:
+        async with aiohttp.ClientSession(headers=HEADERS, json_serialize=ujson.dumps) as self.session:
             while True:
                 _, target = await self.input_queue.get()
 
                 if target is None:
                     break
 
-                result = await self.on_receive(target, session, user_agent, proxy)
+                result = await self.on_receive(target)
 
                 if result["outcome"] == FetchOutcome.MAYBE_PROXY_FAILURE and proxy_failure_count < PROXY_FAILURE_COUNT_MAX:
                     proxy_failure_count += 1
 
                 elif result["outcome"] == FetchOutcome.ANTI_SCRAPING and result["switch_agent"] or \
-                    result in (FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE):
+                    result["outcome"] in (FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE):
 
-                    self.logger.warning("{0}, changing agent from {1}, {2},".format(result["outcome"].value, user_agent, proxy))
+                    self.logger.warning("{0}, changing agent from {1}, {2},".format(
+                        result["outcome"].value, self.user_agent, self.proxy))
 
-                    user_agent, proxy = renew_agent(self.device_type)
-                    session.cookie_jar.clear()
+                    self.user_agent, self.proxy = renew_agent(self.device_type)
+                    self.session.cookie_jar.clear()
                     proxy_failure_count = 0
 
-                    self.logger.warning("to {0}, {1}...".format(user_agent, proxy))
+                    self.logger.warning("to {0}, {1}...".format(self.user_agent, self.proxy))
 
             self.logger.info("exiting scraper...")
 

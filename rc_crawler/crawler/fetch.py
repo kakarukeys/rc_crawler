@@ -24,7 +24,7 @@ class FetchOutcome(Enum):
     MAYBE_PROXY_FAILURE = "maybe_proxy_failure"
 
 
-async def fetch(session, url, extra_headers={}, proxy=None, params=None, filetype="text"):
+async def fetch(session, url, params=None, extra_headers={}, proxy=None, filetype="text"):
     """ fetch content from <url> with query <params>
         filetype: text/json/binary
         returns {"outcome": ..., (optional) "content": ..., (optional) "reason": "reason for failure"}
@@ -36,7 +36,7 @@ async def fetch(session, url, extra_headers={}, proxy=None, params=None, filetyp
 
     try:
         async with session.get(url, headers=extra_headers, proxy=proxy, params=params) as response:
-            content = await getattr(response, filetype)()
+            content = await getattr(response, "read" if filetype == "binary" else filetype)()
 
             if response.status == 200:
                 result = {"outcome": FetchOutcome.SUCCESS, "content": content}

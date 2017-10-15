@@ -60,7 +60,8 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
         run_timestamp,
         platform_module.CRAWL_DEVICE_TYPE,
         platform_module.RATE_LIMIT_PARAMS,
-        get_extractors(platform_module)
+        get_extractors(platform_module),
+        captcha_ocr_config=getattr(platform_module, "CAPTCHA_OCR_CONFIG", None)
     ) for i in range(num_scrapers)]
 
     scraping_tasks = asyncio.ensure_future(asyncio.gather(*[sc.start() for sc in scrapers]))
