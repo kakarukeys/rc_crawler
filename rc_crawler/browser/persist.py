@@ -70,7 +70,7 @@ def back_by_storage(run_timestamp):
 
                 async with aiofiles.open(page_filepath) as f:
                     html = await f.read()
-                    return {"outcome": FetchOutcome.SUCCESS, "html": html, "from_cache": True}
+                    return {"outcome": FetchOutcome.SUCCESS, "content": html, "from_cache": True}
 
             result = await next_handler(url, *args, **kwargs)
             result["from_cache"] = False

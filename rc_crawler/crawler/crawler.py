@@ -12,6 +12,7 @@ from .exceptions import AntiScrapingError
 
 RETRY_MAX = 2
 PROXY_FAILURE_COUNT_MAX = 2
+PROXY_SUCCESS_REWARD = 0.25
 
 # message class for scraper coroutines
 class Target(NamedTuple):
@@ -180,7 +181,8 @@ class Scraper:
                 await harvest(output, target, self.input_queue, self.run_timestamp)
                 amended_result = {"outcome": FetchOutcome.SUCCESS}
 
-            return amended_result
+        amended_result["from_cache"] = from_cache
+        return amended_result
 
     async def on_receive(self, target):
         self.logger.debug("downloading content from {0} url {1}, keywords: {2}{3}".format(
@@ -233,18 +235,20 @@ class Scraper:
 
                 result = await self.on_receive(target)
 
-                if result["outcome"] == FetchOutcome.MAYBE_PROXY_FAILURE and proxy_failure_count < PROXY_FAILURE_COUNT_MAX:
+                if result["outcome"] == FetchOutcome.SUCCESS and not result["from_cache"]:
+                    proxy_failure_count = max(0, proxy_failure_count - PROXY_SUCCESS_REWARD)
+                elif result["outcome"] == FetchOutcome.MAYBE_PROXY_FAILURE:
                     proxy_failure_count += 1
 
-                elif result["outcome"] == FetchOutcome.ANTI_SCRAPING and result["switch_agent"] or \
-                    result["outcome"] in (FetchOutcome.PROXY_FAILURE, FetchOutcome.MAYBE_PROXY_FAILURE):
+                if proxy_failure_count > PROXY_FAILURE_COUNT_MAX or \
+                    result["outcome"] == FetchOutcome.ANTI_SCRAPING and result["switch_agent"] or \
+                    result["outcome"] == FetchOutcome.PROXY_FAILURE:
 
                     self.logger.warning("{0}, changing browser from {1}".format(result["outcome"].value, self.browser))
-
                     self.browser.switch_agent()
-                    proxy_failure_count = 0
-
                     self.logger.warning("to {}...".format(self.browser))
+
+                    proxy_failure_count = 0
 
             self.logger.info("exiting scraper...")
 

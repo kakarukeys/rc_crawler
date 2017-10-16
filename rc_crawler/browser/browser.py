@@ -1,4 +1,5 @@
 from enum import Enum
+from ssl import SSLError
 import asyncio
 import logging
 
@@ -86,7 +87,7 @@ class Browser:
             # subclass of ClientResponseError
             result = {"outcome": FetchOutcome.PROXY_FAILURE, "reason": describe_exception(e)}
 
-        except (aiohttp.ClientPayloadError, aiohttp.ClientResponseError) as e:
+        except (ConnectionResetError, SSLError, aiohttp.ClientPayloadError, aiohttp.ClientResponseError) as e:
             result = {"outcome": FetchOutcome.RETRY, "reason": describe_exception(e)}
 
         except aiohttp.ClientConnectorError as e:
