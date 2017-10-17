@@ -1,7 +1,7 @@
 import os.path
 
 import pytest
-import rc_crawler.crawler.captcha as cp
+import rc_crawler.captcha.tesseract_ocr as cp
 
 
 @pytest.fixture
@@ -13,11 +13,11 @@ def example_captcha(request):
         yield f.read()
 
 
-def test_solve_captcha(example_captcha):
+def test_ocr(example_captcha):
     with pytest.raises(ValueError):
-        cp.solve_captcha_ocr(b'', config="-psm 6")
+        cp.ocr(b'', config="-psm 6")
 
     with pytest.raises(ValueError):
-        cp.solve_captcha_ocr(b'x', config="-psm 6")
+        cp.ocr(b'x', config="-psm 6")
 
-    assert cp.solve_captcha_ocr(example_captcha, config="-psm 6") == "MJGPLP"
+    assert cp.ocr(example_captcha, config="-psm 6") == "MJGPLP"

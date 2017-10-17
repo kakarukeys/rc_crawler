@@ -9,3 +9,11 @@ def describe_exception(e):
         description += ", cause: {}".format(type(e.__cause__).__name__)
 
     return description
+
+
+class DummyAsyncContextManager:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        pass

@@ -85,9 +85,10 @@ class Scraper:
         (platform-dependent arguments)
         device_type: pose as desktop/tablet/mobile browser?
         extractors: {page_category: function extract_<page_category>: html, target, run_timestamp -> {key: value}}
-        middlewares: a list of decorators for Browser object's fetch method
+        middlewares: a list of decorators for Browser object's fetch method,
+        captcha_solver: a CaptchaSolver instance
     """
-    def __init__(self, run_timestamp, device_type, extractors, middlewares=[], captcha_solver_config=None):
+    def __init__(self, run_timestamp, device_type, extractors, middlewares=[], captcha_solver=None):
         actor_id = str(hex(id(self)))[-6:]   # for logging use only, may not be unique
         self.logger = logging.getLogger("rc_crawler.scrape.{}".format(actor_id))
 
@@ -95,7 +96,7 @@ class Scraper:
 
         self.run_timestamp = run_timestamp
         self.extractors = extractors
-        self.captcha_solver_config = captcha_solver_config
+        self.captcha_solver = captcha_solver
 
         self.browser = Browser(device_type)
         self.download = self.browser.fetch
@@ -112,33 +113,44 @@ class Scraper:
         extra_headers = {"Referer": referer}
         captcha_image_url = challenge["captcha_image_url"]
 
-        fetch_result = await self.browser.fetch(captcha_image_url, extra_headers=extra_headers, filetype="binary")
+        image_result = await self.browser.fetch(captcha_image_url, extra_headers=extra_headers, filetype="binary")
 
-        if fetch_result["outcome"] == FetchOutcome.SUCCESS:
+        if image_result["outcome"] == FetchOutcome.SUCCESS:
             try:
-                answer = await solve_captcha(fetch_result["content"], self.captcha_solver_config)
-            except ValueError as e:
-                challenge_result = {"outcome": "failure", "reason": str(e)}
-
-            if answer:
-                submission_form = challenge["submission_form"]
-
-                if submission_form["method"] == "GET":
-                    # the input field which has value None is the answer field
-                    query_params = {k: v or answer for k, v in submission_form["data"].items()}
-
-                    self.logger.info("submission to captcha challenge {0} is {1}".format(captcha_image_url, query_params))
-
-                    await self.browser.fetch(url=submission_form["action"], params=query_params, extra_headers=extra_headers)
-
-                    challenge_result = {"outcome": "success"}
-                else:
-                    challenge_result = {"outcome": "failure", "reason": "non-GET request is not yet supported"}
+                answer = await self.captcha_solver.solve_captcha(image_result["content"])
+            except Exception as e:
+                self.logger.exception(e)
+                challenge_result = {"outcome": "failure", "reason": "failed to solve captcha due to {}".format(e)}
             else:
-                challenge_result = {"outcome": "failure", "reason": "unable to recognize characters in captcha"}
+                if answer:
+                    submission_form = challenge["submission_form"]
+
+                    if submission_form["method"] == "GET":
+                        # the input field which has value None is the answer field
+                        query_params = {k: v or answer for k, v in submission_form["data"].items()}
+
+                        self.logger.info("submission to captcha challenge {0} is {1}".format(captcha_image_url, query_params))
+
+                        submission_result = await self.browser.fetch(
+                            url=submission_form["action"], params=query_params, extra_headers=extra_headers
+                        )
+
+                        if submission_result["outcome"] == FetchOutcome.SUCCESS:
+                            challenge_result = {"outcome": "success"}
+                        else:
+                            challenge_result = {
+                                "outcome": "failure",
+                                "reason": "solution submission failed due to {}".format(submission_result["reason"])
+                            }
+                    else:
+                        challenge_result = {"outcome": "failure", "reason": "non-GET request is not yet supported"}
+                else:
+                    challenge_result = {"outcome": "failure", "reason": "unable to recognize characters in captcha"}
         else:
-            challenge_result = {"outcome": "failure", "reason": "failed to fetch captcha image due to {}".format(
-                fetch_result["reason"])}
+            challenge_result = {
+                "outcome": "failure",
+                "reason": "failed to fetch captcha image due to {}".format(image_result["reason"]),
+            }
 
         return challenge_result
 

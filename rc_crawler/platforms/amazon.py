@@ -17,10 +17,11 @@ CRAWL_DEVICE_TYPE = "mobile"
 # reqs / secs
 RATE_LIMIT_PARAMS = [
     {"max_rate": 2, "time_period": 10},
-    {"max_rate": 200, "time_period": 1*60*60},
-    {"max_rate": 1500, "time_period": 12*60*60},
+    {"max_rate": 180, "time_period": 1*60*60},
+    {"max_rate": 1560, "time_period": 12*60*60},
 ]
 
+CAPTCHA_SOLVER = "tesseract_ocr"
 CAPTCHA_SOLVER_CONFIG = "-psm 6 uppercase_letters"
 
 

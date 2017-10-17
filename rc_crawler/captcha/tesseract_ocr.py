@@ -4,8 +4,10 @@ from PIL import Image
 
 import pytesseract
 
+from rc_crawler.utils import DummyAsyncContextManager
 
-def solve_captcha_ocr(image_binary, config):
+
+def ocr(image_binary: bytes, config: dict) -> str:
     """ return the characters contained in <image_binary> """
     with BytesIO(image_binary) as b:
         try:
@@ -15,7 +17,11 @@ def solve_captcha_ocr(image_binary, config):
             raise ValueError("invalid image binary string: {}".format(image_binary))
 
 
-async def solve_captcha(*args, **kwargs):
-    solution = solve_captcha_ocr(*args, **kwargs)
-    await asyncio.sleep(4)  # imitate human
-    return solution
+class CaptchaSolver(DummyAsyncContextManager):
+    def __init__(self, config: dict) -> None:
+        self.config = config
+
+    async def solve_captcha(self, image_binary: bytes) -> str:
+        solution = ocr(image_binary, self.config)
+        await asyncio.sleep(4)  # imitate human
+        return solution

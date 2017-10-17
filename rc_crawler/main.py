@@ -44,6 +44,27 @@ def get_extractors(platform_module):
     }
 
 
+def get_captcha_solver(platform_module):
+    """ get captcha solver for <platform_module>
+
+        platform_module: python module containing platform-dependent scraping logic
+
+        returns: captcha solver context manager instance
+    """
+    logger = logging.getLogger("rc_crawler.get_captcha_solver")
+
+    captcha_solver_module_name = getattr(platform_module, "CAPTCHA_SOLVER", None)
+    captcha_solver_config = getattr(platform_module, "CAPTCHA_SOLVER_CONFIG", None)
+
+    if captcha_solver_module_name:
+        logger.info("loading captcha solver {0} with config {1}...".format(
+            captcha_solver_module_name, captcha_solver_config))
+
+        CaptchaSolver = import_module('.captcha.' + captcha_solver_module_name, package="rc_crawler")
+        kwargs = {"config": captcha_solver_config} if captcha_solver_config else {}
+        return CaptchaSolver(**kwargs)
+
+
 async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrapers):
     """ assemble and start all the components of the crawler
 
@@ -55,6 +76,9 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
     logger = logging.getLogger("rc_crawler")
 
     logger.info("starting crawler, run timestamp: {}".format(run_timestamp))
+
+    captcha_solver = get_captcha_solver(platform_module)
+
     logger.info("starting {} scrapers...".format(num_scrapers))
 
     scrapers = [Scraper(
@@ -62,7 +86,7 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
         platform_module.CRAWL_DEVICE_TYPE,
         get_extractors(platform_module),
         middlewares=[limit_actions(platform_module.RATE_LIMIT_PARAMS), back_by_storage(run_timestamp)],
-        captcha_solver_config=getattr(platform_module, "CAPTCHA_SOLVER_CONFIG", None)
+        captcha_solver=captcha_solver
     ) for i in range(num_scrapers)]
 
     scraping_tasks = asyncio.ensure_future(asyncio.gather(*[sc.start() for sc in scrapers]))
@@ -80,7 +104,11 @@ async def start_crawler(platform_module, keyword_file, run_timestamp, num_scrape
 
     logger.info("waiting for scrapers to complete all tasks...")
 
-    await scraping_tasks
+    if captcha_solver:
+        with captcha_solver:
+            await scraping_tasks
+    else:
+        await scraping_tasks
 
     logger.info("exiting crawler...")
 
